@@ -74,6 +74,7 @@ fn main() -> eframe::Result<()> {
                 should_quit: false,
                 frame_count: 0,
                 last_trim: std::time::Instant::now(),
+                colors,
             })
         }),
     )
@@ -149,6 +150,7 @@ struct SoundLockApp {
     should_quit: bool,
     frame_count: u32,
     last_trim: std::time::Instant,
+    colors: theme::ThemeColors,
 }
 
 impl eframe::App for SoundLockApp {
@@ -168,15 +170,16 @@ impl eframe::App for SoundLockApp {
             &self.updater,
             &mut self.ui_state,
             &mut self.should_quit,
+            &self.colors,
         );
 
-        // Adaptive frame pacing: 60 FPS when active, 150ms when idle/focused, 1000ms in background
+        // Adaptive frame pacing: 30 FPS when active or game running, 150ms when focused, 1000ms in background
         let is_active = self.ui_state.is_recording_clutch_key
             || self.audio_engine.telemetry.lock().map_or(false, |t| t.is_ducking_active || t.is_game_running);
         let is_focused = ctx.input(|i| i.focused);
 
         let repaint_ms = if is_active {
-            16
+            32
         } else if is_focused {
             150
         } else {
@@ -186,7 +189,7 @@ impl eframe::App for SoundLockApp {
 
         // Aggressive RAM Optimization: trim working set after first frames and periodically when idle
         self.frame_count = self.frame_count.saturating_add(1);
-        let idle_trim_secs = if is_focused { 3 } else { 1 };
+        let idle_trim_secs = if is_focused { 5 } else { 2 };
         if self.frame_count == 2 || self.frame_count == 5 || (self.last_trim.elapsed().as_secs() >= idle_trim_secs && !is_active) {
             trim_working_set();
             self.last_trim = std::time::Instant::now();

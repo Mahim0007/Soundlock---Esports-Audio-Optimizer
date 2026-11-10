@@ -42,10 +42,9 @@ pub fn render_ui(
     updater: &crate::updater::UpdateManager,
     ui_state: &mut UiState,
     should_quit: &mut bool,
+    colors: &ThemeColors,
 ) {
     let mut lang = Language::from_str(&config.language);
-    let colors = ThemeColors::new(&config.accent_hex);
-    theme::apply_theme(ctx, &colors);
 
     // Global Key Capture for Clutch Hotkey rebinding
     if ui_state.is_recording_clutch_key {
@@ -388,7 +387,7 @@ fn render_ducking_view(
                     .size(13.0)
                     .color(colors.text_primary),
             );
-            if theme::white_knob_slider(
+            let resp = theme::white_knob_slider(
                 ui,
                 &mut config.duck_level_percent,
                 0.0,
@@ -397,8 +396,11 @@ fn render_ducking_view(
                 "%",
                 1,
                 colors.accent,
-            ).changed() {
+            );
+            if resp.changed() {
                 audio_engine.update_config(config);
+            }
+            if resp.drag_stopped() {
                 let _ = config.save();
             }
 
@@ -410,7 +412,7 @@ fn render_ducking_view(
                     .size(13.0)
                     .color(colors.text_primary),
             );
-            if theme::white_knob_slider(
+            let resp = theme::white_knob_slider(
                 ui,
                 &mut config.trigger_threshold,
                 0.05,
@@ -419,8 +421,11 @@ fn render_ducking_view(
                 "",
                 3,
                 colors.accent,
-            ).changed() {
+            );
+            if resp.changed() {
                 audio_engine.update_config(config);
+            }
+            if resp.drag_stopped() {
                 let _ = config.save();
             }
 
@@ -502,7 +507,7 @@ fn render_footstep_view(ui: &mut egui::Ui, config: &mut AppConfig, colors: &Them
                     .size(13.0)
                     .color(colors.text_primary),
             );
-            if theme::white_knob_slider(
+            let resp = theme::white_knob_slider(
                 ui,
                 &mut config.footstep_boost_db,
                 0.0,
@@ -511,7 +516,8 @@ fn render_footstep_view(ui: &mut egui::Ui, config: &mut AppConfig, colors: &Them
                 " dB",
                 0,
                 colors.accent,
-            ).changed() {
+            );
+            if resp.drag_stopped() {
                 let _ = config.save();
             }
 

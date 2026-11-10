@@ -126,6 +126,9 @@ impl AudioEngine {
         let mut was_clutch_key_down = false;
         let mut last_target_duck_apps: Vec<String> = Vec::new();
 
+        #[cfg(windows)]
+        let mut session_mgr: Option<windows::Win32::Media::Audio::IAudioSessionManager2> = None;
+
         while is_running.load(Ordering::Relaxed) {
             let loop_start = Instant::now();
 
@@ -135,11 +138,15 @@ impl AudioEngine {
                     AudioEngineCommand::SetAppVolume { pid, volume } => {
                         baseline_volumes.insert(pid, volume);
                         #[cfg(windows)]
-                        Self::raw_set_session_volume(pid, volume);
+                        if let Some(ref mgr) = Self::get_session_manager(&mut session_mgr) {
+                            Self::raw_set_session_volume(mgr, pid, volume);
+                        }
                     }
                     AudioEngineCommand::SetAppMute { pid, mute } => {
                         #[cfg(windows)]
-                        Self::raw_set_session_mute(pid, mute);
+                        if let Some(ref mgr) = Self::get_session_manager(&mut session_mgr) {
+                            Self::raw_set_session_mute(mgr, pid, mute);
+                        }
                     }
                     AudioEngineCommand::TestDucking { duration } => {
                         test_ducking_until = Some(Instant::now() + duration);
@@ -170,8 +177,22 @@ impl AudioEngine {
                 is_clutch_toggled
             };
 
-            // 4. Scan active audio sessions from Windows WASAPI (cached PIDs to eliminate CPU spikes)
-            let current_apps = Self::scan_active_audio_sessions(&config.target_duck_apps, &mut pid_cache);
+            // 4. Scan active audio sessions from Windows WASAPI using cached session manager (zero COM churn)
+            #[cfg(windows)]
+            let current_apps = if let Some(ref mgr) = Self::get_session_manager(&mut session_mgr) {
+                match Self::scan_active_audio_sessions(mgr, &config.target_duck_apps, &mut pid_cache) {
+                    Ok(apps) => apps,
+                    Err(_) => {
+                        session_mgr = None; // Reset cached manager on COM error
+                        Vec::new()
+                    }
+                }
+            } else {
+                Vec::new()
+            };
+
+            #[cfg(not(windows))]
+            let current_apps = Vec::new();
 
             // 5. Identify active target game and sound level
             let (is_game_active, game_name, game_peak) = identify_target_game(&current_apps, &config.target_game);
@@ -181,7 +202,7 @@ impl AudioEngine {
             let is_sound_trigger = config.ducking_enabled && is_game_active && (game_peak > config.trigger_threshold);
             let should_duck = is_test_active || is_clutch_active || is_sound_trigger;
 
-            // Keep track of baseline volumes for apps ONLY when resting at 100% normal volume (prevents downward volume ratcheting)
+            // Keep track of baseline volumes for apps ONLY when resting at 100% normal volume
             if !should_duck && (current_multiplier - 1.0).abs() < 1e-4 {
                 for app in &current_apps {
                     baseline_volumes.insert(app.pid, app.volume);
@@ -205,7 +226,9 @@ impl AudioEngine {
 
             if should_apply {
                 #[cfg(windows)]
-                Self::apply_ducking_attenuation(&current_apps, &baseline_volumes, current_multiplier);
+                if let Some(ref mgr) = Self::get_session_manager(&mut session_mgr) {
+                    Self::apply_ducking_attenuation(mgr, &current_apps, &baseline_volumes, current_multiplier);
+                }
                 last_applied_multiplier = current_multiplier;
             }
 
@@ -229,11 +252,11 @@ impl AudioEngine {
                 t.is_clutch_active = is_clutch_active;
             }
 
-            // 10. Adaptive sleep pacing for sub-0.10% CPU usage
+            // 10. Adaptive sleep pacing for sub-0.05% CPU usage
             let sleep_duration = match cpu_tier {
-                1 => Duration::from_millis(16),  // In-Game Battle: 60 Hz smooth tracking
-                2 => Duration::from_millis(60),  // Background Music/Lobby: ~16 Hz
-                _ => Duration::from_millis(250), // Idle: 4 Hz
+                1 => Duration::from_millis(32),  // In-Game Battle: ~30 Hz smooth tracking
+                2 => Duration::from_millis(100), // Background Music/Lobby: 10 Hz
+                _ => Duration::from_millis(300), // Idle: ~3 Hz
             };
 
             let elapsed = loop_start.elapsed();
@@ -245,8 +268,11 @@ impl AudioEngine {
         // Clean termination: restore any ducked applications to 100% baseline volume
         #[cfg(windows)]
         {
-            let exit_apps = Self::scan_active_audio_sessions(&last_target_duck_apps, &mut pid_cache);
-            Self::apply_ducking_attenuation(&exit_apps, &baseline_volumes, 1.0f32);
+            if let Some(ref mgr) = Self::get_session_manager(&mut session_mgr) {
+                if let Ok(exit_apps) = Self::scan_active_audio_sessions(mgr, &last_target_duck_apps, &mut pid_cache) {
+                    Self::apply_ducking_attenuation(mgr, &exit_apps, &baseline_volumes, 1.0f32);
+                }
+            }
         }
 
         #[cfg(windows)]
@@ -257,94 +283,101 @@ impl AudioEngine {
     }
 
     #[cfg(windows)]
-    fn scan_active_audio_sessions(
-        target_duck_apps: &[String],
-        pid_cache: &mut HashMap<u32, String>,
-    ) -> Vec<AudioAppInfo> {
-        use windows::core::Interface;
-        use windows::Win32::Media::Audio::Endpoints::IAudioMeterInformation;
-        use windows::Win32::Media::Audio::{
-            eMultimedia, eRender, IMMDeviceEnumerator, MMDeviceEnumerator,
-            IAudioSessionControl2, IAudioSessionManager2, ISimpleAudioVolume,
-        };
+    fn get_session_manager(
+        cached: &mut Option<windows::Win32::Media::Audio::IAudioSessionManager2>,
+    ) -> Option<windows::Win32::Media::Audio::IAudioSessionManager2> {
+        if let Some(ref mgr) = cached {
+            return Some(mgr.clone());
+        }
+        use windows::Win32::Media::Audio::{eMultimedia, eRender, IMMDeviceEnumerator, MMDeviceEnumerator, IAudioSessionManager2};
         use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_ALL};
-
-        let mut results = Vec::new();
-
         unsafe {
             let enumerator: Result<IMMDeviceEnumerator, _> = CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL);
-            let Ok(enumerator) = enumerator else { return results; };
-
-            let Ok(device) = enumerator.GetDefaultAudioEndpoint(eRender, eMultimedia) else { return results; };
+            let Ok(enumerator) = enumerator else { return None; };
+            let Ok(device) = enumerator.GetDefaultAudioEndpoint(eRender, eMultimedia) else { return None; };
             let session_manager: Result<IAudioSessionManager2, _> = device.Activate(CLSCTX_ALL, None);
-            let Ok(session_manager) = session_manager else { return results; };
-
-            let Ok(session_list) = session_manager.GetSessionEnumerator() else { return results; };
-            let count = session_list.GetCount().unwrap_or(0);
-
-            for i in 0..count {
-                if let Ok(session) = session_list.GetSession(i) {
-                    if let Ok(control2) = session.cast::<IAudioSessionControl2>() {
-                        let pid = control2.GetProcessId().unwrap_or(0);
-                        if pid == 0 {
-                            continue;
-                        }
-
-                        let name = pid_cache.entry(pid).or_insert_with(|| {
-                            get_process_name_by_pid(pid).unwrap_or_else(|| format!("PID {}", pid))
-                        }).clone();
-
-                        // Read simple audio volume
-                        let mut vol = 1.0f32;
-                        let mut muted = false;
-                        if let Ok(sav) = session.cast::<ISimpleAudioVolume>() {
-                            if let Ok(v) = sav.GetMasterVolume() {
-                                vol = v;
-                            }
-                            if let Ok(m) = sav.GetMute() {
-                                muted = m.as_bool();
-                            }
-                        }
-
-                        // Read real-time peak audio value
-                        let mut peak = 0.0f32;
-                        if let Ok(meter) = session.cast::<IAudioMeterInformation>() {
-                            if let Ok(p) = meter.GetPeakValue() {
-                                peak = p;
-                            }
-                        }
-
-                        let lower = name.to_lowercase();
-                        let clean_lower = lower.replace(".exe", "").replace(" ", "").replace("-", "");
-                        let is_target = target_duck_apps.iter().any(|target| {
-                            let t = target.to_lowercase().replace(".exe", "").replace(" ", "").replace("-", "");
-                            clean_lower == t
-                                || clean_lower.contains(&t)
-                                || t.contains(&clean_lower)
-                                || (t.contains("applemusic") && (clean_lower.contains("itunes") || clean_lower.contains("apple")))
-                                || (t.contains("amazonmusic") && clean_lower.contains("amazon"))
-                        });
-
-                        results.push(AudioAppInfo {
-                            pid,
-                            name,
-                            volume: vol,
-                            peak,
-                            is_muted: muted,
-                            is_target_duck: is_target,
-                        });
-                    }
-                }
+            if let Ok(mgr) = session_manager {
+                *cached = Some(mgr.clone());
+                Some(mgr)
+            } else {
+                None
             }
+        }
+    }
 
-            // Periodic cache hygiene: prune dead PIDs if cache exceeds 128 items
-            if pid_cache.len() > 128 {
-                let active_pids: std::collections::HashSet<u32> = results.iter().map(|a| a.pid).collect();
-                pid_cache.retain(|k, _| active_pids.contains(k));
+    #[cfg(windows)]
+    fn scan_active_audio_sessions(
+        session_manager: &windows::Win32::Media::Audio::IAudioSessionManager2,
+        target_duck_apps: &[String],
+        pid_cache: &mut HashMap<u32, String>,
+    ) -> Result<Vec<AudioAppInfo>, ()> {
+        use windows::core::Interface;
+        use windows::Win32::Media::Audio::Endpoints::IAudioMeterInformation;
+        use windows::Win32::Media::Audio::{IAudioSessionControl2, ISimpleAudioVolume};
+
+        let session_list = unsafe { session_manager.GetSessionEnumerator() }.map_err(|_| ())?;
+        let count = unsafe { session_list.GetCount() }.unwrap_or(0);
+        let mut results = Vec::with_capacity(count as usize);
+
+        for i in 0..count {
+            if let Ok(session) = unsafe { session_list.GetSession(i) } {
+                if let Ok(control2) = session.cast::<IAudioSessionControl2>() {
+                    let pid = unsafe { control2.GetProcessId() }.unwrap_or(0);
+                    if pid == 0 {
+                        continue;
+                    }
+
+                    let name = pid_cache.entry(pid).or_insert_with(|| {
+                        get_process_name_by_pid(pid).unwrap_or_else(|| format!("PID {}", pid))
+                    }).clone();
+
+                    let mut vol = 1.0f32;
+                    let mut muted = false;
+                    if let Ok(sav) = session.cast::<ISimpleAudioVolume>() {
+                        if let Ok(v) = unsafe { sav.GetMasterVolume() } {
+                            vol = v;
+                        }
+                        if let Ok(m) = unsafe { sav.GetMute() } {
+                            muted = m.as_bool();
+                        }
+                    }
+
+                    let mut peak = 0.0f32;
+                    if let Ok(meter) = session.cast::<IAudioMeterInformation>() {
+                        if let Ok(p) = unsafe { meter.GetPeakValue() } {
+                            peak = p;
+                        }
+                    }
+
+                    let lower = name.to_lowercase();
+                    let clean_lower = lower.replace(".exe", "").replace(" ", "").replace("-", "");
+                    let is_target = target_duck_apps.iter().any(|target| {
+                        let t = target.to_lowercase().replace(".exe", "").replace(" ", "").replace("-", "");
+                        clean_lower == t
+                            || clean_lower.contains(&t)
+                            || t.contains(&clean_lower)
+                            || (t.contains("applemusic") && (clean_lower.contains("itunes") || clean_lower.contains("apple")))
+                            || (t.contains("amazonmusic") && clean_lower.contains("amazon"))
+                    });
+
+                    results.push(AudioAppInfo {
+                        pid,
+                        name,
+                        volume: vol,
+                        peak,
+                        is_muted: muted,
+                        is_target_duck: is_target,
+                    });
+                }
             }
         }
 
-        results
+        if pid_cache.len() > 128 {
+            let active_pids: std::collections::HashSet<u32> = results.iter().map(|a| a.pid).collect();
+            pid_cache.retain(|k, _| active_pids.contains(k));
+        }
+
+        Ok(results)
     }
 
     #[cfg(not(windows))]
@@ -357,16 +390,13 @@ impl AudioEngine {
 
     #[cfg(windows)]
     fn apply_ducking_attenuation(
+        session_manager: &windows::Win32::Media::Audio::IAudioSessionManager2,
         apps: &[AudioAppInfo],
         baseline_volumes: &HashMap<u32, f32>,
         multiplier: f32,
     ) {
         use windows::core::Interface;
-        use windows::Win32::Media::Audio::{
-            eMultimedia, eRender, IMMDeviceEnumerator, MMDeviceEnumerator,
-            IAudioSessionControl2, IAudioSessionManager2, ISimpleAudioVolume,
-        };
-        use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_ALL};
+        use windows::Win32::Media::Audio::{IAudioSessionControl2, ISimpleAudioVolume};
 
         let target_pids: Vec<u32> = apps
             .iter()
@@ -378,29 +408,22 @@ impl AudioEngine {
             return;
         }
 
-        unsafe {
-            let enumerator: Result<IMMDeviceEnumerator, _> = CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL);
-            let Ok(enumerator) = enumerator else { return; };
-            let Ok(device) = enumerator.GetDefaultAudioEndpoint(eRender, eMultimedia) else { return; };
-            let session_manager: Result<IAudioSessionManager2, _> = device.Activate(CLSCTX_ALL, None);
-            let Ok(session_manager) = session_manager else { return; };
-            let Ok(session_list) = session_manager.GetSessionEnumerator() else { return; };
-            let count = session_list.GetCount().unwrap_or(0);
-
+        if let Ok(session_list) = unsafe { session_manager.GetSessionEnumerator() } {
+            let count = unsafe { session_list.GetCount() }.unwrap_or(0);
             for i in 0..count {
-                if let Ok(session) = session_list.GetSession(i) {
+                if let Ok(session) = unsafe { session_list.GetSession(i) } {
                     if let Ok(control2) = session.cast::<IAudioSessionControl2>() {
-                        let pid = control2.GetProcessId().unwrap_or(0);
+                        let pid = unsafe { control2.GetProcessId() }.unwrap_or(0);
                         if target_pids.contains(&pid) {
                             if let Ok(sav) = session.cast::<ISimpleAudioVolume>() {
                                 let base = baseline_volumes.get(&pid).copied().unwrap_or(1.0);
                                 let attenuated_vol = (base * multiplier).clamp(0.0, 1.0);
-                                if let Ok(current_vol) = sav.GetMasterVolume() {
+                                if let Ok(current_vol) = unsafe { sav.GetMasterVolume() } {
                                     if (current_vol - attenuated_vol).abs() > 0.005 {
-                                        let _ = sav.SetMasterVolume(attenuated_vol, std::ptr::null());
+                                        let _ = unsafe { sav.SetMasterVolume(attenuated_vol, std::ptr::null()) };
                                     }
                                 } else {
-                                    let _ = sav.SetMasterVolume(attenuated_vol, std::ptr::null());
+                                    let _ = unsafe { sav.SetMasterVolume(attenuated_vol, std::ptr::null()) };
                                 }
                             }
                         }
@@ -411,29 +434,22 @@ impl AudioEngine {
     }
 
     #[cfg(windows)]
-    fn raw_set_session_volume(target_pid: u32, volume: f32) {
+    fn raw_set_session_volume(
+        session_manager: &windows::Win32::Media::Audio::IAudioSessionManager2,
+        target_pid: u32,
+        volume: f32,
+    ) {
         use windows::core::Interface;
-        use windows::Win32::Media::Audio::{
-            eMultimedia, eRender, IMMDeviceEnumerator, MMDeviceEnumerator,
-            IAudioSessionControl2, IAudioSessionManager2, ISimpleAudioVolume,
-        };
-        use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_ALL};
+        use windows::Win32::Media::Audio::{IAudioSessionControl2, ISimpleAudioVolume};
 
-        unsafe {
-            let enumerator: Result<IMMDeviceEnumerator, _> = CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL);
-            let Ok(enumerator) = enumerator else { return; };
-            let Ok(device) = enumerator.GetDefaultAudioEndpoint(eRender, eMultimedia) else { return; };
-            let session_manager: Result<IAudioSessionManager2, _> = device.Activate(CLSCTX_ALL, None);
-            let Ok(session_manager) = session_manager else { return; };
-            let Ok(session_list) = session_manager.GetSessionEnumerator() else { return; };
-            let count = session_list.GetCount().unwrap_or(0);
-
+        if let Ok(session_list) = unsafe { session_manager.GetSessionEnumerator() } {
+            let count = unsafe { session_list.GetCount() }.unwrap_or(0);
             for i in 0..count {
-                if let Ok(session) = session_list.GetSession(i) {
+                if let Ok(session) = unsafe { session_list.GetSession(i) } {
                     if let Ok(control2) = session.cast::<IAudioSessionControl2>() {
-                        if control2.GetProcessId().unwrap_or(0) == target_pid {
+                        if unsafe { control2.GetProcessId() }.unwrap_or(0) == target_pid {
                             if let Ok(sav) = session.cast::<ISimpleAudioVolume>() {
-                                let _ = sav.SetMasterVolume(volume.clamp(0.0, 1.0), std::ptr::null());
+                                let _ = unsafe { sav.SetMasterVolume(volume.clamp(0.0, 1.0), std::ptr::null()) };
                             }
                             break;
                         }
@@ -444,30 +460,23 @@ impl AudioEngine {
     }
 
     #[cfg(windows)]
-    fn raw_set_session_mute(target_pid: u32, mute: bool) {
+    fn raw_set_session_mute(
+        session_manager: &windows::Win32::Media::Audio::IAudioSessionManager2,
+        target_pid: u32,
+        mute: bool,
+    ) {
         use windows::core::Interface;
         use windows::Win32::Foundation::BOOL;
-        use windows::Win32::Media::Audio::{
-            eMultimedia, eRender, IMMDeviceEnumerator, MMDeviceEnumerator,
-            IAudioSessionControl2, IAudioSessionManager2, ISimpleAudioVolume,
-        };
-        use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_ALL};
+        use windows::Win32::Media::Audio::{IAudioSessionControl2, ISimpleAudioVolume};
 
-        unsafe {
-            let enumerator: Result<IMMDeviceEnumerator, _> = CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL);
-            let Ok(enumerator) = enumerator else { return; };
-            let Ok(device) = enumerator.GetDefaultAudioEndpoint(eRender, eMultimedia) else { return; };
-            let session_manager: Result<IAudioSessionManager2, _> = device.Activate(CLSCTX_ALL, None);
-            let Ok(session_manager) = session_manager else { return; };
-            let Ok(session_list) = session_manager.GetSessionEnumerator() else { return; };
-            let count = session_list.GetCount().unwrap_or(0);
-
+        if let Ok(session_list) = unsafe { session_manager.GetSessionEnumerator() } {
+            let count = unsafe { session_list.GetCount() }.unwrap_or(0);
             for i in 0..count {
-                if let Ok(session) = session_list.GetSession(i) {
+                if let Ok(session) = unsafe { session_list.GetSession(i) } {
                     if let Ok(control2) = session.cast::<IAudioSessionControl2>() {
-                        if control2.GetProcessId().unwrap_or(0) == target_pid {
+                        if unsafe { control2.GetProcessId() }.unwrap_or(0) == target_pid {
                             if let Ok(sav) = session.cast::<ISimpleAudioVolume>() {
-                                let _ = sav.SetMute(BOOL::from(mute), std::ptr::null());
+                                let _ = unsafe { sav.SetMute(BOOL::from(mute), std::ptr::null()) };
                             }
                             break;
                         }
@@ -600,10 +609,33 @@ pub fn hotkey_to_vk(name: &str) -> Option<i32> {
 
 #[cfg(windows)]
 fn get_process_name_by_pid(pid: u32) -> Option<String> {
+    if pid == 0 || pid == 4 {
+        return Some("System".to_string());
+    }
+
+    use windows::Win32::System::Threading::{OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_FORMAT, PROCESS_QUERY_LIMITED_INFORMATION};
+    use windows::Win32::Foundation::CloseHandle;
+
+    unsafe {
+        if let Ok(handle) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) {
+            let mut buf = [0u16; 260];
+            let mut size = buf.len() as u32;
+            if QueryFullProcessImageNameW(handle, PROCESS_NAME_FORMAT(0), windows::core::PWSTR(buf.as_mut_ptr()), &mut size).is_ok() {
+                let _ = CloseHandle(handle);
+                let full_path = String::from_utf16_lossy(&buf[..size as usize]);
+                if let Some(filename) = std::path::Path::new(&full_path).file_name() {
+                    return Some(filename.to_string_lossy().to_string());
+                }
+                return Some(full_path);
+            }
+            let _ = CloseHandle(handle);
+        }
+    }
+
+    // Fast fallback: toolhelp snapshot only if OpenProcess failed
     use windows::Win32::System::Diagnostics::ToolHelp::{
         CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
     };
-    use windows::Win32::Foundation::CloseHandle;
 
     unsafe {
         let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0).ok()?;
