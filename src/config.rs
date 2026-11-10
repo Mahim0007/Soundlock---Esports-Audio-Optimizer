@@ -15,7 +15,12 @@ pub struct AppConfig {
     pub fade_out_ms: u32,        // e.g. 120ms
     pub fade_in_ms: u32,         // e.g. 250ms
     pub clutch_hotkey: String,
+    pub clutch_hold_mode: bool,  // true = hold to duck, false = toggle
+    pub footstep_boost_enabled: bool,
+    pub footstep_boost_db: f32,
+    pub footstep_preset: String,
     pub target_duck_apps: Vec<String>,
+    pub custom_apps: Vec<String>,
 }
 
 impl Default for AppConfig {
@@ -26,17 +31,24 @@ impl Default for AppConfig {
             accent_hex: "#E3008C".to_string(), // Hot Pink/Magenta matching screenshot!
             minimize_to_tray: true,
             ducking_enabled: true,
-            target_game: "Valorant / CS2 (Auto)".to_string(),
+            target_game: "Auto (Any Active Game)".to_string(),
             duck_level_percent: 20.0,
             trigger_threshold: 0.20,
             fade_out_ms: 120,
             fade_in_ms: 250,
             clutch_hotkey: "Caps Lock".to_string(),
+            clutch_hold_mode: true,
+            footstep_boost_enabled: true,
+            footstep_boost_db: 6.0,
+            footstep_preset: "Footsteps (2.5 kHz - 6.0 kHz)".to_string(),
             target_duck_apps: vec![
                 "Spotify.exe".to_string(),
                 "Discord.exe".to_string(),
                 "chrome.exe".to_string(),
+                "brave.exe".to_string(),
+                "msedge.exe".to_string(),
             ],
+            custom_apps: Vec::new(),
         }
     }
 }

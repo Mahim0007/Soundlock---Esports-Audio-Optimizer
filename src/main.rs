@@ -4,10 +4,11 @@ pub mod config;
 pub mod theme;
 pub mod audio_engine;
 pub mod ui;
+pub mod startup;
 
 use config::AppConfig;
 use audio_engine::AudioEngine;
-use ui::Tab;
+use ui::{Tab, UiState};
 
 fn main() -> eframe::Result<()> {
     // Single instance mutex
@@ -29,7 +30,7 @@ fn main() -> eframe::Result<()> {
     };
 
     let mut vp = egui::ViewportBuilder::default()
-        .with_inner_size([720.0, 470.0])
+        .with_inner_size([720.0, 480.0])
         .with_min_inner_size([640.0, 420.0])
         .with_title("SoundLock - Esports Audio Optimizer")
         .with_decorations(true)
@@ -45,8 +46,13 @@ fn main() -> eframe::Result<()> {
         ..Default::default()
     };
 
-    let config = AppConfig::load();
-    let audio_engine = AudioEngine::new();
+    let mut config = AppConfig::load();
+    // Sync startup toggle with real Windows registry
+    if let Ok(enabled) = startup::is_startup_enabled() {
+        config.run_on_startup = enabled;
+    }
+
+    let audio_engine = AudioEngine::new(config.clone());
 
     eframe::run_native(
         "SoundLock Suite",
@@ -58,6 +64,7 @@ fn main() -> eframe::Result<()> {
                 config,
                 active_tab: Tab::General,
                 audio_engine,
+                ui_state: UiState::default(),
                 should_quit: false,
             })
         }),
@@ -68,6 +75,7 @@ struct SoundLockApp {
     config: AppConfig,
     active_tab: Tab,
     audio_engine: AudioEngine,
+    ui_state: UiState,
     should_quit: bool,
 }
 
@@ -82,10 +90,11 @@ impl eframe::App for SoundLockApp {
             &mut self.config,
             &mut self.active_tab,
             &self.audio_engine,
+            &mut self.ui_state,
             &mut self.should_quit,
         );
 
-        // Smooth 60 FPS repainting when active
+        // Smooth 60 FPS repainting when active or listening
         ctx.request_repaint_after(std::time::Duration::from_millis(16));
     }
 }

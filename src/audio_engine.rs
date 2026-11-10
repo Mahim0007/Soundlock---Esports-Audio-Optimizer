@@ -1,7 +1,10 @@
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
+use crate::config::AppConfig;
 
 #[derive(Debug, Clone)]
 pub struct AudioAppInfo {
@@ -19,9 +22,10 @@ pub struct EngineTelemetry {
     pub detected_game: String,
     pub game_peak_level: f32,
     pub is_ducking_active: bool,
-    pub current_duck_multiplier: f32, // 1.0 = normal, 0.20 = ducked
+    pub current_duck_multiplier: f32, // 1.0 = normal, e.g. 0.20 = ducked
     pub active_apps: Vec<AudioAppInfo>,
     pub cpu_tier: u8, // 1=Active, 2=Background, 3=Idle
+    pub is_clutch_active: bool,
 }
 
 impl Default for EngineTelemetry {
@@ -34,44 +38,66 @@ impl Default for EngineTelemetry {
             current_duck_multiplier: 1.0,
             active_apps: Vec::new(),
             cpu_tier: 3,
+            is_clutch_active: false,
         }
     }
+}
+
+pub enum AudioEngineCommand {
+    SetAppVolume { pid: u32, volume: f32 },
+    SetAppMute { pid: u32, mute: bool },
+    TestDucking { duration: Duration },
+    ToggleClutch,
 }
 
 pub struct AudioEngine {
     pub telemetry: Arc<Mutex<EngineTelemetry>>,
     pub is_running: Arc<AtomicBool>,
-    pub force_clutch_mute: Arc<AtomicBool>,
+    pub command_sender: Sender<AudioEngineCommand>,
+    pub shared_config: Arc<Mutex<AppConfig>>,
 }
 
 impl AudioEngine {
-    pub fn new() -> Self {
+    pub fn new(initial_config: AppConfig) -> Self {
         let telemetry = Arc::new(Mutex::new(EngineTelemetry::default()));
         let is_running = Arc::new(AtomicBool::new(true));
-        let force_clutch_mute = Arc::new(AtomicBool::new(false));
+        let (tx, rx) = channel::<AudioEngineCommand>();
+        let shared_config = Arc::new(Mutex::new(initial_config));
 
         let t_telemetry = Arc::clone(&telemetry);
         let t_running = Arc::clone(&is_running);
-        let t_clutch = Arc::clone(&force_clutch_mute);
+        let t_config = Arc::clone(&shared_config);
 
         thread::Builder::new()
             .name("soundlock-audio-worker".to_string())
             .spawn(move || {
-                Self::worker_loop(t_telemetry, t_running, t_clutch);
+                Self::worker_loop(t_telemetry, t_running, rx, t_config);
             })
             .expect("Failed to spawn audio worker thread");
 
         Self {
             telemetry,
             is_running,
-            force_clutch_mute,
+            command_sender: tx,
+            shared_config,
+        }
+    }
+
+    pub fn send_command(&self, cmd: AudioEngineCommand) {
+        let _ = self.command_sender.send(cmd);
+    }
+
+    pub fn update_config(&self, new_cfg: &AppConfig) {
+        if let Ok(mut cfg) = self.shared_config.lock() {
+            *cfg = new_cfg.clone();
         }
     }
 
     fn worker_loop(
         telemetry: Arc<Mutex<EngineTelemetry>>,
         is_running: Arc<AtomicBool>,
-        force_clutch: Arc<AtomicBool>,
+        command_receiver: Receiver<AudioEngineCommand>,
+        shared_config: Arc<Mutex<AppConfig>>,
     ) {
         #[cfg(windows)]
         unsafe {
@@ -80,71 +106,112 @@ impl AudioEngine {
         }
 
         let mut current_multiplier = 1.0f32;
-        let mut last_session_scan = Instant::now();
-        let mut cached_apps: Vec<AudioAppInfo> = Vec::new();
+        let mut baseline_volumes: HashMap<u32, f32> = HashMap::new();
+        let mut test_ducking_until: Option<Instant> = None;
+        let mut is_clutch_toggled = false;
+        let mut was_clutch_key_down = false;
 
         while is_running.load(Ordering::Relaxed) {
             let loop_start = Instant::now();
 
-            // Periodic session scan (every 1.5s to keep CPU near 0.0%)
-            if last_session_scan.elapsed() >= Duration::from_millis(1500) {
-                last_session_scan = Instant::now();
-                cached_apps = Self::scan_active_audio_sessions();
+            // 1. Process any incoming user commands from UI
+            while let Ok(cmd) = command_receiver.try_recv() {
+                match cmd {
+                    AudioEngineCommand::SetAppVolume { pid, volume } => {
+                        baseline_volumes.insert(pid, volume);
+                        #[cfg(windows)]
+                        Self::raw_set_session_volume(pid, volume);
+                    }
+                    AudioEngineCommand::SetAppMute { pid, mute } => {
+                        #[cfg(windows)]
+                        Self::raw_set_session_mute(pid, mute);
+                    }
+                    AudioEngineCommand::TestDucking { duration } => {
+                        test_ducking_until = Some(Instant::now() + duration);
+                    }
+                    AudioEngineCommand::ToggleClutch => {
+                        is_clutch_toggled = !is_clutch_toggled;
+                    }
+                }
             }
 
-            // Check if any recognized competitive game is running
-            let game_candidate = cached_apps.iter().find(|a| {
-                let lower = a.name.to_lowercase();
-                lower.contains("cs2")
-                    || lower.contains("valorant")
-                    || lower.contains("apex")
-                    || lower.contains("r5apex")
-                    || lower.contains("cod")
-                    || lower.contains("warzone")
-                    || lower.contains("fortnite")
-                    || lower.contains("overwatch")
-            });
-
-            let is_clutch_pressed = force_clutch.load(Ordering::Relaxed);
-            let (is_game_active, game_name, game_peak) = if let Some(game) = game_candidate {
-                (true, game.name.clone(), game.peak)
+            // 2. Read snapshot of config
+            let config = if let Ok(c) = shared_config.lock() {
+                c.clone()
             } else {
-                (false, "No Competitive Game Active (Idle)".to_string(), 0.0)
+                AppConfig::default()
             };
 
-            // Trigger decision: Clutch hotkey pressed OR game sound > threshold (0.25)
-            let should_duck = is_clutch_pressed || (is_game_active && game_peak > 0.25);
+            // 3. Check Emergency Clutch Hotkey state (Win32 GetAsyncKeyState)
+            let is_clutch_key_pressed = check_hotkey_pressed(&config.clutch_hotkey);
+            let is_clutch_active = if config.clutch_hold_mode {
+                is_clutch_key_pressed || is_clutch_toggled
+            } else {
+                if is_clutch_key_pressed && !was_clutch_key_down {
+                    is_clutch_toggled = !is_clutch_toggled;
+                }
+                was_clutch_key_down = is_clutch_key_pressed;
+                is_clutch_toggled
+            };
 
-            // Smooth Cosine / Linear Easing
-            let target_multiplier = if should_duck { 0.20 } else { 1.0 };
+            // 4. Scan active audio sessions from Windows WASAPI
+            let current_apps = Self::scan_active_audio_sessions(&config.target_duck_apps);
+
+            // Keep track of baseline volumes for apps when NOT actively ducking
+            if (current_multiplier - 1.0).abs() < 0.05 {
+                for app in &current_apps {
+                    baseline_volumes.insert(app.pid, app.volume);
+                }
+            }
+
+            // 5. Identify active target game and sound level
+            let (is_game_active, game_name, game_peak) = identify_target_game(&current_apps, &config.target_game);
+
+            // 6. Decide whether audio ducking should trigger right now
+            let is_test_active = test_ducking_until.map_or(false, |until| Instant::now() < until);
+            let is_sound_trigger = config.ducking_enabled && is_game_active && (game_peak > config.trigger_threshold);
+            let should_duck = is_test_active || is_clutch_active || is_sound_trigger;
+
+            // 7. Calculate duck multiplier with smooth easing
+            let duck_floor = (config.duck_level_percent / 100.0).clamp(0.0, 1.0);
+            let target_multiplier = if should_duck { duck_floor } else { 1.0f32 };
+
             if (current_multiplier - target_multiplier).abs() > 0.01 {
-                let speed = if should_duck { 0.12 } else { 0.06 };
+                let speed = if should_duck { 0.20 } else { 0.08 }; // Fast attack, smooth decay
                 current_multiplier += (target_multiplier - current_multiplier) * speed;
             } else {
                 current_multiplier = target_multiplier;
             }
 
-            // Apply volume attenuation to target apps (e.g. Spotify, Discord, Chrome)
+            // 8. Apply real attenuation to all target duck applications via WASAPI
             #[cfg(windows)]
-            Self::apply_ducking_to_apps(&cached_apps, current_multiplier);
+            Self::apply_ducking_attenuation(&current_apps, &baseline_volumes, current_multiplier);
 
-            // Update shared telemetry state
-            let cpu_tier = if is_game_active { 1 } else if !cached_apps.is_empty() { 2 } else { 3 };
+            // 9. Update telemetry for UI display
+            let cpu_tier = if is_game_active {
+                1
+            } else if !current_apps.is_empty() {
+                2
+            } else {
+                3
+            };
+
             if let Ok(mut t) = telemetry.lock() {
                 t.is_game_running = is_game_active;
                 t.detected_game = game_name;
                 t.game_peak_level = game_peak;
                 t.is_ducking_active = should_duck;
                 t.current_duck_multiplier = current_multiplier;
-                t.active_apps = cached_apps.clone();
+                t.active_apps = current_apps;
                 t.cpu_tier = cpu_tier;
+                t.is_clutch_active = is_clutch_active;
             }
 
-            // Adaptive sleep based on CPU Tier (Blueprint Tier 1 = 16ms, Tier 2 = 100ms, Tier 3 = 500ms)
+            // 10. Adaptive sleep pacing for sub-0.10% CPU usage
             let sleep_duration = match cpu_tier {
-                1 => Duration::from_millis(16),  // In-Game: 60 FPS smooth pacing
-                2 => Duration::from_millis(100), // Background lobby: 10 Hz
-                _ => Duration::from_millis(500), // Idle: 2 Hz (0.00% CPU)
+                1 => Duration::from_millis(16),  // In-Game Battle: 60 Hz smooth tracking
+                2 => Duration::from_millis(60),  // Background Music/Lobby: ~16 Hz
+                _ => Duration::from_millis(250), // Idle: 4 Hz
             };
 
             let elapsed = loop_start.elapsed();
@@ -161,12 +228,12 @@ impl AudioEngine {
     }
 
     #[cfg(windows)]
-    fn scan_active_audio_sessions() -> Vec<AudioAppInfo> {
+    fn scan_active_audio_sessions(target_duck_apps: &[String]) -> Vec<AudioAppInfo> {
         use windows::core::Interface;
         use windows::Win32::Media::Audio::Endpoints::IAudioMeterInformation;
         use windows::Win32::Media::Audio::{
-            eRender, eMultimedia, IMMDeviceEnumerator, MMDeviceEnumerator,
-            IAudioSessionManager2, IAudioSessionControl2, ISimpleAudioVolume,
+            eMultimedia, eRender, IMMDeviceEnumerator, MMDeviceEnumerator,
+            IAudioSessionControl2, IAudioSessionManager2, ISimpleAudioVolume,
         };
         use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_ALL};
 
@@ -214,11 +281,10 @@ impl AudioEngine {
                         }
 
                         let lower = name.to_lowercase();
-                        let is_target = lower.contains("spotify")
-                            || lower.contains("discord")
-                            || lower.contains("chrome")
-                            || lower.contains("brave")
-                            || lower.contains("msedge");
+                        let is_target = target_duck_apps.iter().any(|target| {
+                            let t = target.to_lowercase();
+                            lower == t || lower.starts_with(&t.replace(".exe", ""))
+                        });
 
                         results.push(AudioAppInfo {
                             pid,
@@ -237,14 +303,217 @@ impl AudioEngine {
     }
 
     #[cfg(not(windows))]
-    fn scan_active_audio_sessions() -> Vec<AudioAppInfo> {
+    fn scan_active_audio_sessions(_target_duck_apps: &[String]) -> Vec<AudioAppInfo> {
         Vec::new()
     }
 
     #[cfg(windows)]
-    fn apply_ducking_to_apps(apps: &[AudioAppInfo], multiplier: f32) {
-        // Only target apps selected for ducking
-        let _ = (apps, multiplier);
+    fn apply_ducking_attenuation(
+        apps: &[AudioAppInfo],
+        baseline_volumes: &HashMap<u32, f32>,
+        multiplier: f32,
+    ) {
+        use windows::core::Interface;
+        use windows::Win32::Media::Audio::{
+            eMultimedia, eRender, IMMDeviceEnumerator, MMDeviceEnumerator,
+            IAudioSessionControl2, IAudioSessionManager2, ISimpleAudioVolume,
+        };
+        use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_ALL};
+
+        let target_pids: Vec<u32> = apps
+            .iter()
+            .filter(|a| a.is_target_duck)
+            .map(|a| a.pid)
+            .collect();
+
+        if target_pids.is_empty() {
+            return;
+        }
+
+        unsafe {
+            let enumerator: Result<IMMDeviceEnumerator, _> = CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL);
+            let Ok(enumerator) = enumerator else { return; };
+            let Ok(device) = enumerator.GetDefaultAudioEndpoint(eRender, eMultimedia) else { return; };
+            let session_manager: Result<IAudioSessionManager2, _> = device.Activate(CLSCTX_ALL, None);
+            let Ok(session_manager) = session_manager else { return; };
+            let Ok(session_list) = session_manager.GetSessionEnumerator() else { return; };
+            let count = session_list.GetCount().unwrap_or(0);
+
+            for i in 0..count {
+                if let Ok(session) = session_list.GetSession(i) {
+                    if let Ok(control2) = session.cast::<IAudioSessionControl2>() {
+                        let pid = control2.GetProcessId().unwrap_or(0);
+                        if target_pids.contains(&pid) {
+                            if let Ok(sav) = session.cast::<ISimpleAudioVolume>() {
+                                let base = baseline_volumes.get(&pid).copied().unwrap_or(1.0);
+                                let attenuated_vol = (base * multiplier).clamp(0.0, 1.0);
+                                let _ = sav.SetMasterVolume(attenuated_vol, std::ptr::null());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    fn raw_set_session_volume(target_pid: u32, volume: f32) {
+        use windows::core::Interface;
+        use windows::Win32::Media::Audio::{
+            eMultimedia, eRender, IMMDeviceEnumerator, MMDeviceEnumerator,
+            IAudioSessionControl2, IAudioSessionManager2, ISimpleAudioVolume,
+        };
+        use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_ALL};
+
+        unsafe {
+            let enumerator: Result<IMMDeviceEnumerator, _> = CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL);
+            let Ok(enumerator) = enumerator else { return; };
+            let Ok(device) = enumerator.GetDefaultAudioEndpoint(eRender, eMultimedia) else { return; };
+            let session_manager: Result<IAudioSessionManager2, _> = device.Activate(CLSCTX_ALL, None);
+            let Ok(session_manager) = session_manager else { return; };
+            let Ok(session_list) = session_manager.GetSessionEnumerator() else { return; };
+            let count = session_list.GetCount().unwrap_or(0);
+
+            for i in 0..count {
+                if let Ok(session) = session_list.GetSession(i) {
+                    if let Ok(control2) = session.cast::<IAudioSessionControl2>() {
+                        if control2.GetProcessId().unwrap_or(0) == target_pid {
+                            if let Ok(sav) = session.cast::<ISimpleAudioVolume>() {
+                                let _ = sav.SetMasterVolume(volume.clamp(0.0, 1.0), std::ptr::null());
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    fn raw_set_session_mute(target_pid: u32, mute: bool) {
+        use windows::core::Interface;
+        use windows::Win32::Foundation::BOOL;
+        use windows::Win32::Media::Audio::{
+            eMultimedia, eRender, IMMDeviceEnumerator, MMDeviceEnumerator,
+            IAudioSessionControl2, IAudioSessionManager2, ISimpleAudioVolume,
+        };
+        use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_ALL};
+
+        unsafe {
+            let enumerator: Result<IMMDeviceEnumerator, _> = CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL);
+            let Ok(enumerator) = enumerator else { return; };
+            let Ok(device) = enumerator.GetDefaultAudioEndpoint(eRender, eMultimedia) else { return; };
+            let session_manager: Result<IAudioSessionManager2, _> = device.Activate(CLSCTX_ALL, None);
+            let Ok(session_manager) = session_manager else { return; };
+            let Ok(session_list) = session_manager.GetSessionEnumerator() else { return; };
+            let count = session_list.GetCount().unwrap_or(0);
+
+            for i in 0..count {
+                if let Ok(session) = session_list.GetSession(i) {
+                    if let Ok(control2) = session.cast::<IAudioSessionControl2>() {
+                        if control2.GetProcessId().unwrap_or(0) == target_pid {
+                            if let Ok(sav) = session.cast::<ISimpleAudioVolume>() {
+                                let _ = sav.SetMute(BOOL::from(mute), std::ptr::null());
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn identify_target_game(apps: &[AudioAppInfo], target_game_setting: &str) -> (bool, String, f32) {
+    let known_esports = [
+        "cs2", "csgo", "valorant", "r5apex", "cod", "warzone", "fortnite",
+        "overwatch", "rainbowsix", "pubg", "deadlock", "destiny2", "halo",
+    ];
+
+    // Explicit specific game match
+    if !target_game_setting.starts_with("Auto") {
+        let needle = target_game_setting.to_lowercase().replace(".exe", "");
+        if let Some(game) = apps.iter().find(|a| a.name.to_lowercase().contains(&needle)) {
+            return (true, game.name.clone(), game.peak);
+        }
+    }
+
+    // Auto-detection: First check recognized esports games
+    if let Some(game) = apps.iter().find(|a| {
+        let low = a.name.to_lowercase();
+        known_esports.iter().any(|g| low.contains(g))
+    }) {
+        return (true, game.name.clone(), game.peak);
+    }
+
+    // Auto-detection fallback: Any audio session producing sound that is NOT in duck targets
+    if let Some(active_session) = apps.iter().filter(|a| !a.is_target_duck && a.peak > 0.02).max_by(|a, b| a.peak.total_cmp(&b.peak)) {
+        return (true, format!("{} (Active Audio)", active_session.name), active_session.peak);
+    }
+
+    (false, "No Active Game (Standing by)".to_string(), 0.0)
+}
+
+pub fn check_hotkey_pressed(hotkey_name: &str) -> bool {
+    #[cfg(windows)]
+    {
+        if let Some(vk) = hotkey_to_vk(hotkey_name) {
+            unsafe {
+                use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
+                let state = GetAsyncKeyState(vk);
+                return (state as u16 & 0x8000) != 0;
+            }
+        }
+    }
+    false
+}
+
+#[cfg(windows)]
+pub fn hotkey_to_vk(name: &str) -> Option<i32> {
+    use windows::Win32::UI::Input::KeyboardAndMouse::*;
+
+    let trimmed = name.trim().to_lowercase();
+    match trimmed.as_str() {
+        "caps lock" | "capslock" | "caps" => Some(VK_CAPITAL.0 as i32),
+        "f1" => Some(VK_F1.0 as i32),
+        "f2" => Some(VK_F2.0 as i32),
+        "f3" => Some(VK_F3.0 as i32),
+        "f4" => Some(VK_F4.0 as i32),
+        "f5" => Some(VK_F5.0 as i32),
+        "f6" => Some(VK_F6.0 as i32),
+        "f7" => Some(VK_F7.0 as i32),
+        "f8" => Some(VK_F8.0 as i32),
+        "f9" => Some(VK_F9.0 as i32),
+        "f10" => Some(VK_F10.0 as i32),
+        "f11" => Some(VK_F11.0 as i32),
+        "f12" => Some(VK_F12.0 as i32),
+        "space" => Some(VK_SPACE.0 as i32),
+        "tab" => Some(VK_TAB.0 as i32),
+        "left alt" | "alt" => Some(VK_LMENU.0 as i32),
+        "left ctrl" | "ctrl" => Some(VK_LCONTROL.0 as i32),
+        "left shift" | "shift" => Some(VK_LSHIFT.0 as i32),
+        "mouse 4" | "xbutton1" => Some(VK_XBUTTON1.0 as i32),
+        "mouse 5" | "xbutton2" => Some(VK_XBUTTON2.0 as i32),
+        "middle click" | "mbutton" => Some(VK_MBUTTON.0 as i32),
+        "c" => Some(b'C' as i32),
+        "v" => Some(b'V' as i32),
+        "x" => Some(b'X' as i32),
+        "z" => Some(b'Z' as i32),
+        "t" => Some(b'T' as i32),
+        "q" => Some(b'Q' as i32),
+        _ => {
+            // Single char check
+            if trimmed.len() == 1 {
+                let ch = trimmed.chars().next().unwrap();
+                if ch.is_ascii_alphabetic() {
+                    return Some(ch.to_ascii_uppercase() as i32);
+                }
+                if ch.is_ascii_digit() {
+                    return Some(ch as i32);
+                }
+            }
+            None
+        }
     }
 }
 
@@ -276,9 +545,4 @@ fn get_process_name_by_pid(pid: u32) -> Option<String> {
         let _ = CloseHandle(snapshot);
         None
     }
-}
-
-#[cfg(not(windows))]
-fn get_process_name_by_pid(_pid: u32) -> Option<String> {
-    None
 }
