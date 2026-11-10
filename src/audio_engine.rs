@@ -281,9 +281,14 @@ impl AudioEngine {
                         }
 
                         let lower = name.to_lowercase();
+                        let clean_lower = lower.replace(".exe", "").replace(" ", "").replace("-", "");
                         let is_target = target_duck_apps.iter().any(|target| {
-                            let t = target.to_lowercase();
-                            lower == t || lower.starts_with(&t.replace(".exe", ""))
+                            let t = target.to_lowercase().replace(".exe", "").replace(" ", "").replace("-", "");
+                            clean_lower == t
+                                || clean_lower.contains(&t)
+                                || t.contains(&clean_lower)
+                                || (t.contains("applemusic") && (clean_lower.contains("itunes") || clean_lower.contains("apple")))
+                                || (t.contains("amazonmusic") && clean_lower.contains("amazon"))
                         });
 
                         results.push(AudioAppInfo {

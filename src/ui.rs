@@ -736,6 +736,8 @@ fn render_specific_apps_view(
             let presets = [
                 "Spotify.exe",
                 "Discord.exe",
+                "Amazon Music.exe",
+                "AppleMusic.exe",
                 "chrome.exe",
                 "brave.exe",
                 "msedge.exe",

@@ -44,6 +44,8 @@ impl Default for AppConfig {
             target_duck_apps: vec![
                 "Spotify.exe".to_string(),
                 "Discord.exe".to_string(),
+                "Amazon Music.exe".to_string(),
+                "AppleMusic.exe".to_string(),
                 "chrome.exe".to_string(),
                 "brave.exe".to_string(),
                 "msedge.exe".to_string(),
