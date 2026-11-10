@@ -14,6 +14,9 @@ use updater::UpdateManager;
 use ui::{Tab, UiState};
 
 fn main() -> eframe::Result<()> {
+    std::panic::set_hook(Box::new(|info| {
+        let _ = std::fs::write("panic.txt", format!("{}", info));
+    }));
     // Single instance mutex
     #[cfg(windows)]
     let _single_instance_mutex = unsafe {

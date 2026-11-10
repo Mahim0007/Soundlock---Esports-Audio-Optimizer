@@ -26,6 +26,7 @@ pub struct EngineTelemetry {
     pub active_apps: Vec<AudioAppInfo>,
     pub cpu_tier: u8, // 1=Active, 2=Background, 3=Idle
     pub is_clutch_active: bool,
+    pub is_limiter_active: bool,
 }
 
 impl Default for EngineTelemetry {
@@ -39,6 +40,7 @@ impl Default for EngineTelemetry {
             active_apps: Vec::new(),
             cpu_tier: 3,
             is_clutch_active: false,
+            is_limiter_active: false,
         }
     }
 }
@@ -126,6 +128,9 @@ impl AudioEngine {
         let mut was_clutch_key_down = false;
         let mut last_target_duck_apps: Vec<String> = Vec::new();
         let mut last_duck_trigger_time: Option<Instant> = None;
+        let mut last_gunfire_limit_time: Option<Instant> = None;
+        let mut is_game_limited = false;
+        let mut last_limited_game_pid: Option<u32> = None;
 
         #[cfg(windows)]
         let mut session_mgr: Option<windows::Win32::Media::Audio::IAudioSessionManager2> = None;
@@ -203,8 +208,8 @@ impl AudioEngine {
             #[cfg(not(windows))]
             let current_apps = Vec::new();
 
-            // 5. Identify active target game and sound level
-            let (is_game_active, game_name, game_peak) = identify_target_game(&current_apps, &config.target_game);
+            // 5. Identify active target game, peak level, and game PID
+            let (is_game_active, game_name, game_peak, game_pid) = identify_target_game(&current_apps, &config.target_game);
 
             // 6. Decide whether audio ducking should trigger right now
             let is_test_active = test_ducking_until.map_or(false, |until| Instant::now() < until);
@@ -217,14 +222,18 @@ impl AudioEngine {
             let should_duck = is_test_active || is_clutch_active || is_hold_active;
 
             // Keep track of baseline volumes for apps ONLY when resting at 100% normal volume
+            let duck_floor = (config.duck_level_percent / 100.0).clamp(0.0, 1.0);
             if !should_duck && (current_multiplier - 1.0).abs() < 1e-4 {
                 for app in &current_apps {
-                    baseline_volumes.insert(app.pid, app.volume);
+                    if app.volume > (duck_floor + 0.10).max(0.40) {
+                        baseline_volumes.insert(app.pid, app.volume);
+                    } else {
+                        baseline_volumes.entry(app.pid).or_insert(1.0);
+                    }
                 }
             }
 
             // 7. Calculate duck multiplier with smooth easing: Fast 40ms attack, gentle fade-in
-            let duck_floor = (config.duck_level_percent / 100.0).clamp(0.0, 1.0);
             let target_multiplier = if should_duck { duck_floor } else { 1.0f32 };
 
             if (current_multiplier - target_multiplier).abs() > 0.01 {
@@ -246,6 +255,48 @@ impl AudioEngine {
                 last_applied_multiplier = current_multiplier;
             }
 
+            // 8b. SoundLock Gunshot / Ear-Guard Limiter (Ceiling Clamping)
+            let limiter_ceiling = (config.sound_limiter_ceiling / 100.0).clamp(0.15, 1.0);
+            let mut is_limiter_active = false;
+            if config.sound_limiter_enabled && is_game_active {
+                if let Some(g_pid) = game_pid {
+                    last_limited_game_pid = Some(g_pid);
+                    if game_peak > limiter_ceiling {
+                        // Gunshot or explosion exceeds ceiling: clamp game volume immediately
+                        let clamped_vol = (limiter_ceiling / game_peak).clamp(0.15, 1.0);
+                        #[cfg(windows)]
+                        if let Some(ref mgr) = Self::get_session_manager(&mut session_mgr) {
+                            Self::raw_set_session_volume(mgr, g_pid, clamped_vol);
+                        }
+                        last_gunfire_limit_time = Some(Instant::now());
+                        is_game_limited = true;
+                        is_limiter_active = true;
+                    } else if is_game_limited {
+                        if let Some(t) = last_gunfire_limit_time {
+                            if t.elapsed() >= Duration::from_millis(150) {
+                                #[cfg(windows)]
+                                if let Some(ref mgr) = Self::get_session_manager(&mut session_mgr) {
+                                    Self::raw_set_session_volume(mgr, g_pid, 1.0);
+                                }
+                                is_game_limited = false;
+                                last_gunfire_limit_time = None;
+                            } else {
+                                is_limiter_active = true;
+                            }
+                        }
+                    }
+                }
+            } else if is_game_limited {
+                if let Some(g_pid) = last_limited_game_pid {
+                    #[cfg(windows)]
+                    if let Some(ref mgr) = Self::get_session_manager(&mut session_mgr) {
+                        Self::raw_set_session_volume(mgr, g_pid, 1.0);
+                    }
+                }
+                is_game_limited = false;
+                last_gunfire_limit_time = None;
+            }
+
             // 9. Update telemetry for UI display
             let cpu_tier = if is_game_active {
                 1
@@ -264,6 +315,7 @@ impl AudioEngine {
                 t.active_apps = current_apps;
                 t.cpu_tier = cpu_tier;
                 t.is_clutch_active = is_clutch_active;
+                t.is_limiter_active = is_limiter_active;
             }
 
             // 10. Adaptive sleep pacing for sub-0.05% CPU usage
@@ -279,12 +331,17 @@ impl AudioEngine {
             }
         }
 
-        // Clean termination: restore any ducked applications to 100% baseline volume
+        // Clean termination: restore any ducked applications and game session to 100% volume
         #[cfg(windows)]
         {
             if let Some(ref mgr) = Self::get_session_manager(&mut session_mgr) {
                 if let Ok(exit_apps) = Self::scan_active_audio_sessions(mgr, &last_target_duck_apps, &mut pid_cache) {
                     Self::apply_ducking_attenuation(mgr, &exit_apps, &baseline_volumes, 1.0f32);
+                }
+                if is_game_limited {
+                    if let Some(g_pid) = last_limited_game_pid {
+                        Self::raw_set_session_volume(mgr, g_pid, 1.0);
+                    }
                 }
             }
         }
@@ -501,7 +558,7 @@ impl AudioEngine {
     }
 }
 
-fn identify_target_game(apps: &[AudioAppInfo], target_game_setting: &str) -> (bool, String, f32) {
+fn identify_target_game(apps: &[AudioAppInfo], target_game_setting: &str) -> (bool, String, f32, Option<u32>) {
     let known_esports: &[(&[&str], &str)] = &[
         (&["valorant", "riotclient"], "VALORANT"),
         (&["cs2", "csgo"], "Counter-Strike 2"),
@@ -535,14 +592,14 @@ fn identify_target_game(apps: &[AudioAppInfo], target_game_setting: &str) -> (bo
                     let low = a.name.to_lowercase();
                     keys.iter().any(|k| low.contains(k))
                 }) {
-                    return (true, (*title).to_string(), game.peak);
+                    return (true, (*title).to_string(), game.peak, Some(game.pid));
                 }
             }
         }
         // Fallback for custom specified target
         let clean = needle.replace(".exe", "");
         if let Some(game) = apps.iter().find(|a| a.name.to_lowercase().contains(&clean)) {
-            return (true, game.name.clone(), game.peak);
+            return (true, game.name.clone(), game.peak, Some(game.pid));
         }
     }
 
@@ -552,16 +609,16 @@ fn identify_target_game(apps: &[AudioAppInfo], target_game_setting: &str) -> (bo
             let low = a.name.to_lowercase();
             keys.iter().any(|k| low.contains(k))
         }) {
-            return (true, (*title).to_string(), game.peak);
+            return (true, (*title).to_string(), game.peak, Some(game.pid));
         }
     }
 
     // Auto-detection fallback: Any audio session producing sound that is NOT in duck targets
     if let Some(active_session) = apps.iter().filter(|a| !a.is_target_duck && a.peak > 0.02).max_by(|a, b| a.peak.total_cmp(&b.peak)) {
-        return (true, format!("{} (Active Audio)", active_session.name), active_session.peak);
+        return (true, format!("{} (Active Audio)", active_session.name), active_session.peak, Some(active_session.pid));
     }
 
-    (false, "No Active Game (Standing by)".to_string(), 0.0)
+    (false, "No Active Game (Standing by)".to_string(), 0.0, None)
 }
 
 pub fn check_hotkey_pressed(hotkey_name: &str) -> bool {
@@ -706,15 +763,17 @@ mod tests {
         ];
 
         // Specific dropdown selection
-        let (active, name, peak) = identify_target_game(&apps, "Counter-Strike 2 (cs2)");
+        let (active, name, peak, pid) = identify_target_game(&apps, "Counter-Strike 2 (cs2)");
         assert!(active);
         assert_eq!(name, "Counter-Strike 2");
         assert_eq!(peak, 0.45);
+        assert_eq!(pid, Some(100));
 
         // Auto detection
-        let (active_auto, name_auto, _) = identify_target_game(&apps, "Auto (Any Active Game)");
+        let (active_auto, name_auto, _, pid_auto) = identify_target_game(&apps, "Auto (Any Active Game)");
         assert!(active_auto);
         assert_eq!(name_auto, "Counter-Strike 2");
+        assert_eq!(pid_auto, Some(100));
 
         // VALORANT Detection Test
         let val_apps = vec![
@@ -727,11 +786,12 @@ mod tests {
                 is_target_duck: false,
             },
         ];
-        let (val_auto, val_name, _) = identify_target_game(&val_apps, "Auto (Any Active Game)");
+        let (val_auto, val_name, _, val_pid) = identify_target_game(&val_apps, "Auto (Any Active Game)");
         assert!(val_auto);
         assert_eq!(val_name, "VALORANT");
+        assert_eq!(val_pid, Some(35260));
 
-        let (val_explicit, val_name2, _) = identify_target_game(&val_apps, "VALORANT");
+        let (val_explicit, val_name2, _, _) = identify_target_game(&val_apps, "VALORANT");
         assert!(val_explicit);
         assert_eq!(val_name2, "VALORANT");
 
@@ -750,7 +810,7 @@ mod tests {
             AudioAppInfo { pid: 999, name: "IndieShooter2026.exe".to_string(), volume: 1.0, peak: 0.25, is_muted: false, is_target_duck: false },
             AudioAppInfo { pid: 200, name: "Spotify.exe".to_string(), volume: 0.8, peak: 0.30, is_muted: false, is_target_duck: true },
         ];
-        let (unknown_active, unknown_name, _) = identify_target_game(&unknown_game, "Auto (Any Active Game)");
+        let (unknown_active, unknown_name, _, _) = identify_target_game(&unknown_game, "Auto (Any Active Game)");
         assert!(unknown_active);
         assert!(unknown_name.contains("IndieShooter2026.exe"));
 
@@ -759,11 +819,9 @@ mod tests {
             AudioAppInfo { pid: 200, name: "Spotify.exe".to_string(), volume: 0.8, peak: 0.40, is_muted: false, is_target_duck: true },
             AudioAppInfo { pid: 201, name: "Discord.exe".to_string(), volume: 1.0, peak: 0.10, is_muted: false, is_target_duck: true },
         ];
-        let (music_active, _, _) = identify_target_game(&music_only, "Auto (Any Active Game)");
+        let (music_active, _, _, _) = identify_target_game(&music_only, "Auto (Any Active Game)");
         assert!(!music_active);
     }
-
-
 
     #[test]
     #[cfg(windows)]

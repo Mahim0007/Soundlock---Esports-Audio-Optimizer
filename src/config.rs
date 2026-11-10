@@ -21,6 +21,18 @@ pub struct AppConfig {
     pub footstep_preset: String,
     pub target_duck_apps: Vec<String>,
     pub custom_apps: Vec<String>,
+    #[serde(default = "default_limiter_enabled")]
+    pub sound_limiter_enabled: bool,
+    #[serde(default = "default_limiter_ceiling")]
+    pub sound_limiter_ceiling: f32, // e.g. 70.0%
+}
+
+fn default_limiter_enabled() -> bool {
+    true
+}
+
+fn default_limiter_ceiling() -> f32 {
+    70.0
 }
 
 impl Default for AppConfig {
@@ -57,6 +69,8 @@ impl Default for AppConfig {
                 "wmplayer.exe".to_string(),
             ],
             custom_apps: Vec::new(),
+            sound_limiter_enabled: true,
+            sound_limiter_ceiling: 70.0,
         }
     }
 }

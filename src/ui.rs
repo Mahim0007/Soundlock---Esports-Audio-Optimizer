@@ -472,6 +472,88 @@ fn render_ducking_view(
                 });
             });
         });
+
+    ui.add_space(14.0);
+
+    // CARD 2: SoundLock Gunfire / Explosion Limiter (Hearing Protection)
+    egui::Frame::none()
+        .fill(colors.card_bg)
+        .stroke(Stroke::new(1.0_f32, colors.card_stroke))
+        .rounding(egui::Rounding::same(10.0))
+        .inner_margin(16.0)
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new("🛡️ SoundLock Ear Guard (Gunfire Limiter)")
+                        .strong()
+                        .size(15.0)
+                        .color(colors.text_primary),
+                );
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if theme::toggle_switch(ui, &mut config.sound_limiter_enabled, colors.accent).changed() {
+                        audio_engine.update_config(config);
+                        let _ = config.save();
+                    }
+                });
+            });
+
+            ui.add_space(6.0);
+            ui.label(
+                egui::RichText::new("Dynamically limits deafening gunshots, flashbangs, and explosions above ceiling level so you can turn your volume up to hear footsteps without ear pain.")
+                    .size(12.5)
+                    .color(colors.text_secondary),
+            );
+
+            ui.add_space(14.0);
+
+            ui.label(
+                egui::RichText::new(format!("Max Sound Ceiling ({:.0}%)", config.sound_limiter_ceiling))
+                    .size(13.0)
+                    .color(colors.text_primary),
+            );
+            let resp = theme::white_knob_slider(
+                ui,
+                &mut config.sound_limiter_ceiling,
+                30.0,
+                95.0,
+                Some(5.0),
+                "%",
+                0,
+                colors.accent,
+            );
+            if resp.changed() {
+                audio_engine.update_config(config);
+            }
+            if resp.drag_stopped() {
+                let _ = config.save();
+            }
+
+            ui.add_space(12.0);
+
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Limiter Guard:").size(13.0).color(colors.text_secondary));
+                if telemetry.is_limiter_active {
+                    ui.label(
+                        egui::RichText::new("⚡ CLAMPING LOUD GUNFIRE")
+                            .strong()
+                            .size(13.0)
+                            .color(colors.accent),
+                    );
+                } else if config.sound_limiter_enabled {
+                    ui.label(
+                        egui::RichText::new("✓ PROTECTING EARS (ARMED)")
+                            .size(13.0)
+                            .color(Color32::from_rgb(0, 240, 140)),
+                    );
+                } else {
+                    ui.label(
+                        egui::RichText::new("OFF")
+                            .size(13.0)
+                            .color(colors.text_muted),
+                    );
+                }
+            });
+        });
 }
 
 // ----------------------------------------------------
