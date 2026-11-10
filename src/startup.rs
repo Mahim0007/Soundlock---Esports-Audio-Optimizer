@@ -71,7 +71,7 @@ pub fn set_startup_enabled(enable: bool) -> Result<(), String> {
         let result = if enable {
             let current_exe = std::env::current_exe()
                 .map_err(|e| format!("Could not get current executable path: {}", e))?;
-            let exe_str = current_exe.to_string_lossy().to_string();
+            let exe_str = format!("\"{}\"", current_exe.to_string_lossy());
             let wide_exe = to_wide_chars(&exe_str);
 
             let reg_set = RegSetValueExW(

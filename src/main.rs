@@ -118,6 +118,9 @@ struct SoundLockApp {
 impl eframe::App for SoundLockApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         if self.should_quit {
+            self.audio_engine.stop();
+            // Allow audio worker thread to cleanly restore all ducked volumes back to 100%
+            std::thread::sleep(std::time::Duration::from_millis(80));
             std::process::exit(0);
         }
 
@@ -130,7 +133,10 @@ impl eframe::App for SoundLockApp {
             &mut self.should_quit,
         );
 
-        // Smooth 60 FPS repainting when active or listening
-        ctx.request_repaint_after(std::time::Duration::from_millis(16));
+        // Adaptive frame pacing: 60 FPS when active or rebinding hotkeys, 100ms when idle
+        let is_active = self.ui_state.is_recording_clutch_key
+            || self.audio_engine.telemetry.lock().map_or(false, |t| t.is_ducking_active || t.is_game_running);
+        let repaint_ms = if is_active { 16 } else { 100 };
+        ctx.request_repaint_after(std::time::Duration::from_millis(repaint_ms));
     }
 }

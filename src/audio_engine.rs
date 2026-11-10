@@ -83,6 +83,10 @@ impl AudioEngine {
         }
     }
 
+    pub fn stop(&self) {
+        self.is_running.store(false, Ordering::SeqCst);
+    }
+
     pub fn send_command(&self, cmd: AudioEngineCommand) {
         let _ = self.command_sender.send(cmd);
     }
@@ -92,7 +96,15 @@ impl AudioEngine {
             *cfg = new_cfg.clone();
         }
     }
+}
 
+impl Drop for AudioEngine {
+    fn drop(&mut self) {
+        self.is_running.store(false, Ordering::SeqCst);
+    }
+}
+
+impl AudioEngine {
     fn worker_loop(
         telemetry: Arc<Mutex<EngineTelemetry>>,
         is_running: Arc<AtomicBool>,
@@ -106,10 +118,13 @@ impl AudioEngine {
         }
 
         let mut current_multiplier = 1.0f32;
+        let mut last_applied_multiplier = 1.0f32;
         let mut baseline_volumes: HashMap<u32, f32> = HashMap::new();
+        let mut pid_cache: HashMap<u32, String> = HashMap::new();
         let mut test_ducking_until: Option<Instant> = None;
         let mut is_clutch_toggled = false;
         let mut was_clutch_key_down = false;
+        let mut last_target_duck_apps: Vec<String> = Vec::new();
 
         while is_running.load(Ordering::Relaxed) {
             let loop_start = Instant::now();
@@ -141,6 +156,7 @@ impl AudioEngine {
             } else {
                 AppConfig::default()
             };
+            last_target_duck_apps = config.target_duck_apps.clone();
 
             // 3. Check Emergency Clutch Hotkey state (Win32 GetAsyncKeyState)
             let is_clutch_key_pressed = check_hotkey_pressed(&config.clutch_hotkey);
@@ -154,15 +170,8 @@ impl AudioEngine {
                 is_clutch_toggled
             };
 
-            // 4. Scan active audio sessions from Windows WASAPI
-            let current_apps = Self::scan_active_audio_sessions(&config.target_duck_apps);
-
-            // Keep track of baseline volumes for apps when NOT actively ducking
-            if (current_multiplier - 1.0).abs() < 0.05 {
-                for app in &current_apps {
-                    baseline_volumes.insert(app.pid, app.volume);
-                }
-            }
+            // 4. Scan active audio sessions from Windows WASAPI (cached PIDs to eliminate CPU spikes)
+            let current_apps = Self::scan_active_audio_sessions(&config.target_duck_apps, &mut pid_cache);
 
             // 5. Identify active target game and sound level
             let (is_game_active, game_name, game_peak) = identify_target_game(&current_apps, &config.target_game);
@@ -171,6 +180,13 @@ impl AudioEngine {
             let is_test_active = test_ducking_until.map_or(false, |until| Instant::now() < until);
             let is_sound_trigger = config.ducking_enabled && is_game_active && (game_peak > config.trigger_threshold);
             let should_duck = is_test_active || is_clutch_active || is_sound_trigger;
+
+            // Keep track of baseline volumes for apps ONLY when resting at 100% normal volume (prevents downward volume ratcheting)
+            if !should_duck && (current_multiplier - 1.0).abs() < 1e-4 {
+                for app in &current_apps {
+                    baseline_volumes.insert(app.pid, app.volume);
+                }
+            }
 
             // 7. Calculate duck multiplier with smooth easing
             let duck_floor = (config.duck_level_percent / 100.0).clamp(0.0, 1.0);
@@ -183,9 +199,15 @@ impl AudioEngine {
                 current_multiplier = target_multiplier;
             }
 
-            // 8. Apply real attenuation to all target duck applications via WASAPI
-            #[cfg(windows)]
-            Self::apply_ducking_attenuation(&current_apps, &baseline_volumes, current_multiplier);
+            // 8. Apply real attenuation to all target duck applications via WASAPI (only when multiplier changes)
+            let should_apply = (current_multiplier - last_applied_multiplier).abs() > 0.002
+                || (current_multiplier == 1.0 && (last_applied_multiplier - 1.0).abs() > 0.001);
+
+            if should_apply {
+                #[cfg(windows)]
+                Self::apply_ducking_attenuation(&current_apps, &baseline_volumes, current_multiplier);
+                last_applied_multiplier = current_multiplier;
+            }
 
             // 9. Update telemetry for UI display
             let cpu_tier = if is_game_active {
@@ -220,6 +242,13 @@ impl AudioEngine {
             }
         }
 
+        // Clean termination: restore any ducked applications to 100% baseline volume
+        #[cfg(windows)]
+        {
+            let exit_apps = Self::scan_active_audio_sessions(&last_target_duck_apps, &mut pid_cache);
+            Self::apply_ducking_attenuation(&exit_apps, &baseline_volumes, 1.0f32);
+        }
+
         #[cfg(windows)]
         unsafe {
             use windows::Win32::System::Com::CoUninitialize;
@@ -228,7 +257,10 @@ impl AudioEngine {
     }
 
     #[cfg(windows)]
-    fn scan_active_audio_sessions(target_duck_apps: &[String]) -> Vec<AudioAppInfo> {
+    fn scan_active_audio_sessions(
+        target_duck_apps: &[String],
+        pid_cache: &mut HashMap<u32, String>,
+    ) -> Vec<AudioAppInfo> {
         use windows::core::Interface;
         use windows::Win32::Media::Audio::Endpoints::IAudioMeterInformation;
         use windows::Win32::Media::Audio::{
@@ -258,7 +290,9 @@ impl AudioEngine {
                             continue;
                         }
 
-                        let name = get_process_name_by_pid(pid).unwrap_or_else(|| format!("PID {}", pid));
+                        let name = pid_cache.entry(pid).or_insert_with(|| {
+                            get_process_name_by_pid(pid).unwrap_or_else(|| format!("PID {}", pid))
+                        }).clone();
 
                         // Read simple audio volume
                         let mut vol = 1.0f32;
@@ -302,13 +336,22 @@ impl AudioEngine {
                     }
                 }
             }
+
+            // Periodic cache hygiene: prune dead PIDs if cache exceeds 128 items
+            if pid_cache.len() > 128 {
+                let active_pids: std::collections::HashSet<u32> = results.iter().map(|a| a.pid).collect();
+                pid_cache.retain(|k, _| active_pids.contains(k));
+            }
         }
 
         results
     }
 
     #[cfg(not(windows))]
-    fn scan_active_audio_sessions(_target_duck_apps: &[String]) -> Vec<AudioAppInfo> {
+    fn scan_active_audio_sessions(
+        _target_duck_apps: &[String],
+        _pid_cache: &mut HashMap<u32, String>,
+    ) -> Vec<AudioAppInfo> {
         Vec::new()
     }
 
@@ -352,7 +395,13 @@ impl AudioEngine {
                             if let Ok(sav) = session.cast::<ISimpleAudioVolume>() {
                                 let base = baseline_volumes.get(&pid).copied().unwrap_or(1.0);
                                 let attenuated_vol = (base * multiplier).clamp(0.0, 1.0);
-                                let _ = sav.SetMasterVolume(attenuated_vol, std::ptr::null());
+                                if let Ok(current_vol) = sav.GetMasterVolume() {
+                                    if (current_vol - attenuated_vol).abs() > 0.005 {
+                                        let _ = sav.SetMasterVolume(attenuated_vol, std::ptr::null());
+                                    }
+                                } else {
+                                    let _ = sav.SetMasterVolume(attenuated_vol, std::ptr::null());
+                                }
                             }
                         }
                     }
@@ -431,15 +480,42 @@ impl AudioEngine {
 
 fn identify_target_game(apps: &[AudioAppInfo], target_game_setting: &str) -> (bool, String, f32) {
     let known_esports = [
-        "cs2", "csgo", "valorant", "r5apex", "cod", "warzone", "fortnite",
+        "cs2", "csgo", "valorant", "r5apex", "apex", "cod", "warzone", "fortnite",
         "overwatch", "rainbowsix", "pubg", "deadlock", "destiny2", "halo",
     ];
 
     // Explicit specific game match
     if !target_game_setting.starts_with("Auto") {
-        let needle = target_game_setting.to_lowercase().replace(".exe", "");
-        if let Some(game) = apps.iter().find(|a| a.name.to_lowercase().contains(&needle)) {
-            return (true, game.name.clone(), game.peak);
+        let search_keys: &[&str] = if target_game_setting.contains("Counter-Strike") {
+            &["cs2", "csgo"]
+        } else if target_game_setting.contains("VALORANT") {
+            &["valorant"]
+        } else if target_game_setting.contains("Apex") {
+            &["r5apex", "apex"]
+        } else if target_game_setting.contains("Call of Duty") {
+            &["cod", "warzone"]
+        } else if target_game_setting.contains("Fortnite") {
+            &["fortnite"]
+        } else if target_game_setting.contains("Overwatch") {
+            &["overwatch"]
+        } else if target_game_setting.contains("Rainbow Six") {
+            &["rainbowsix"]
+        } else {
+            &[]
+        };
+
+        if !search_keys.is_empty() {
+            if let Some(game) = apps.iter().find(|a| {
+                let low = a.name.to_lowercase();
+                search_keys.iter().any(|&k| low.contains(k))
+            }) {
+                return (true, game.name.clone(), game.peak);
+            }
+        } else {
+            let needle = target_game_setting.to_lowercase().replace(".exe", "");
+            if let Some(game) = apps.iter().find(|a| a.name.to_lowercase().contains(&needle)) {
+                return (true, game.name.clone(), game.peak);
+            }
         }
     }
 
@@ -549,5 +625,53 @@ fn get_process_name_by_pid(pid: u32) -> Option<String> {
         }
         let _ = CloseHandle(snapshot);
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_game_matching() {
+        let apps = vec![
+            AudioAppInfo {
+                pid: 100,
+                name: "cs2.exe".to_string(),
+                volume: 1.0,
+                peak: 0.45,
+                is_muted: false,
+                is_target_duck: false,
+            },
+            AudioAppInfo {
+                pid: 200,
+                name: "Spotify.exe".to_string(),
+                volume: 0.8,
+                peak: 0.1,
+                is_muted: false,
+                is_target_duck: true,
+            },
+        ];
+
+        // Specific dropdown selection
+        let (active, name, peak) = identify_target_game(&apps, "Counter-Strike 2 (cs2)");
+        assert!(active);
+        assert_eq!(name, "cs2.exe");
+        assert_eq!(peak, 0.45);
+
+        // Auto detection
+        let (active_auto, name_auto, _) = identify_target_game(&apps, "Auto (Any Active Game)");
+        assert!(active_auto);
+        assert_eq!(name_auto, "cs2.exe");
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn test_hotkey_resolution() {
+        assert!(hotkey_to_vk("Caps Lock").is_some());
+        assert!(hotkey_to_vk("F5").is_some());
+        assert!(hotkey_to_vk("Space").is_some());
+        assert!(hotkey_to_vk("Mouse 4").is_some());
+        assert!(hotkey_to_vk("NonexistentKey999").is_none());
     }
 }

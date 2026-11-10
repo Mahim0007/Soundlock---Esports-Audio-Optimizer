@@ -51,7 +51,7 @@ pub fn render_ui(
         capture_key_press(ctx, config, ui_state, audio_engine);
     }
 
-    let telemetry = audio_engine.telemetry.lock().unwrap().clone();
+    let telemetry = audio_engine.telemetry.lock().unwrap_or_else(|e| e.into_inner()).clone();
 
     // ----------------------------------------------------
     // LEFT SIDEBAR (Dark Acrylic Sidebar matching screenshot)
@@ -983,6 +983,10 @@ fn capture_key_press(
     ctx.input(|i| {
         for event in &i.raw.events {
             if let egui::Event::Key { key, pressed: true, .. } = event {
+                if *key == egui::Key::Escape {
+                    ui_state.is_recording_clutch_key = false;
+                    return;
+                }
                 let name = match key {
                     egui::Key::F1 => "F1",
                     egui::Key::F2 => "F2",
