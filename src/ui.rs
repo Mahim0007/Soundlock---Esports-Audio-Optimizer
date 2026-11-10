@@ -42,7 +42,7 @@ pub fn render_ui(
     ui_state: &mut UiState,
     should_quit: &mut bool,
 ) {
-    let lang = Language::from_str(&config.language);
+    let mut lang = Language::from_str(&config.language);
     let colors = ThemeColors::new(&config.accent_hex);
     theme::apply_theme(ctx, &colors);
 
@@ -146,11 +146,11 @@ pub fn render_ui(
             // RENDER SELECTED TAB
             egui::ScrollArea::vertical().show(ui, |ui| {
                 match *active_tab {
-                    Tab::General => render_general_view(ui, config, &colors, &telemetry, audio_engine, lang),
+                    Tab::General => render_general_view(ui, config, &colors, &telemetry, audio_engine, &mut lang),
                     Tab::SmartDucking => render_ducking_view(ui, config, &colors, &telemetry, audio_engine, lang),
                     Tab::FootstepBooster => render_footstep_view(ui, config, &colors, lang),
-                    Tab::AppMixer => render_mixer_view(ui, &telemetry, audio_engine, config, &colors),
-                    Tab::SpecificApps => render_specific_apps_view(ui, config, ui_state, &telemetry, audio_engine, &colors),
+                    Tab::AppMixer => render_mixer_view(ui, &telemetry, audio_engine, config, &colors, lang),
+                    Tab::SpecificApps => render_specific_apps_view(ui, config, ui_state, &telemetry, audio_engine, &colors, lang),
                     Tab::Shortcuts => render_shortcuts_view(ui, config, ui_state, &telemetry, audio_engine, &colors, lang),
                     Tab::Developer => render_developer_view(ui, &telemetry, &colors),
                     Tab::Information => render_information_view(ui, &colors),
@@ -168,7 +168,7 @@ fn render_general_view(
     colors: &ThemeColors,
     telemetry: &EngineTelemetry,
     audio_engine: &AudioEngine,
-    lang: Language,
+    lang: &mut Language,
 ) {
     // CARD 1: Run on startup & Language
     egui::Frame::none()
@@ -204,8 +204,10 @@ fn render_general_view(
                         .selected_text(lang.display_name())
                         .show_ui(ui, |ui| {
                             for l in Language::all() {
-                                if ui.selectable_label(config.language == l.display_name(), l.display_name()).clicked() {
+                                let is_active = *lang == *l;
+                                if ui.selectable_label(is_active, l.display_name()).clicked() {
                                     config.language = l.display_name().to_string();
+                                    *lang = *l;
                                     let _ = config.save();
                                 }
                             }
@@ -418,17 +420,17 @@ fn render_ducking_view(
 
             // Live Ducking Status Badge + Test Button
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("Engine Status:").size(13.0).color(colors.text_secondary));
+                ui.label(egui::RichText::new(lang.engine_status()).size(13.0).color(colors.text_secondary));
                 if telemetry.is_ducking_active {
                     ui.label(
-                        egui::RichText::new("● DUCKING ACTIVE (Audio Lowered)")
+                        egui::RichText::new(lang.ducking_active_status())
                             .strong()
                             .size(13.0)
                             .color(colors.accent),
                     );
                 } else {
                     ui.label(
-                        egui::RichText::new("○ Normal Volume (Idle)")
+                        egui::RichText::new(lang.normal_volume_status())
                             .size(13.0)
                             .color(Color32::from_rgb(0, 240, 140)),
                     );
@@ -549,6 +551,7 @@ fn render_mixer_view(
     audio_engine: &AudioEngine,
     config: &mut AppConfig,
     colors: &ThemeColors,
+    lang: Language,
 ) {
     egui::Frame::none()
         .fill(colors.card_bg)
@@ -557,14 +560,14 @@ fn render_mixer_view(
         .inner_margin(16.0)
         .show(ui, |ui| {
             ui.label(
-                egui::RichText::new("Active Windows Audio Sessions & Mixer")
+                egui::RichText::new(lang.tab_mixer())
                     .strong()
                     .size(15.0)
                     .color(colors.text_primary),
             );
             ui.add_space(4.0);
             ui.label(
-                egui::RichText::new("Adjust individual application volumes and mute states in real-time:")
+                egui::RichText::new(lang.mixer_desc())
                     .size(12.0)
                     .color(colors.text_secondary),
             );
@@ -663,6 +666,7 @@ fn render_specific_apps_view(
     telemetry: &EngineTelemetry,
     audio_engine: &AudioEngine,
     colors: &ThemeColors,
+    lang: Language,
 ) {
     egui::Frame::none()
         .fill(colors.card_bg)
@@ -671,14 +675,14 @@ fn render_specific_apps_view(
         .inner_margin(16.0)
         .show(ui, |ui| {
             ui.label(
-                egui::RichText::new("Applications to Automatically Duck")
+                egui::RichText::new(lang.specific_apps_title())
                     .strong()
                     .size(15.0)
                     .color(colors.text_primary),
             );
             ui.add_space(6.0);
             ui.label(
-                egui::RichText::new("Select or add the applications SoundLock should silence/lower during gameplay:")
+                egui::RichText::new(lang.specific_apps_desc())
                     .size(12.5)
                     .color(colors.text_secondary),
             );
@@ -723,7 +727,7 @@ fn render_specific_apps_view(
             ui.separator();
             ui.add_space(8.0);
             ui.label(
-                egui::RichText::new("Add Custom Executable:")
+                egui::RichText::new(lang.add_custom_exe())
                     .strong()
                     .size(13.0)
                     .color(colors.text_primary),
@@ -731,7 +735,7 @@ fn render_specific_apps_view(
 
             ui.horizontal(|ui| {
                 ui.text_edit_singleline(&mut ui_state.custom_app_input);
-                let add_btn = egui::Button::new("+ Add App")
+                let add_btn = egui::Button::new(lang.btn_add_app())
                     .fill(Color32::from_rgb(32, 42, 60))
                     .rounding(egui::Rounding::same(6.0));
 
@@ -849,16 +853,16 @@ fn render_shortcuts_view(
 
             // Mode Selector: Hold to Duck vs Press to Toggle
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("Trigger Mode:").size(12.5).color(colors.text_secondary));
+                ui.label(egui::RichText::new(lang.trigger_mode()).size(12.5).color(colors.text_secondary));
 
-                if ui.radio_value(&mut config.clutch_hold_mode, true, "Hold Key").clicked() {
+                if ui.radio_value(&mut config.clutch_hold_mode, true, lang.hold_key_mode()).clicked() {
                     audio_engine.update_config(config);
                     let _ = config.save();
                 }
 
                 ui.add_space(10.0);
 
-                if ui.radio_value(&mut config.clutch_hold_mode, false, "Toggle On/Off").clicked() {
+                if ui.radio_value(&mut config.clutch_hold_mode, false, lang.toggle_mode()).clicked() {
                     audio_engine.update_config(config);
                     let _ = config.save();
                 }
@@ -868,18 +872,18 @@ fn render_shortcuts_view(
 
             // Live Clutch Status & Manual Toggle Test
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("Clutch Status:").size(13.0).color(colors.text_secondary));
+                ui.label(egui::RichText::new(lang.clutch_status()).size(13.0).color(colors.text_secondary));
 
                 if telemetry.is_clutch_active {
                     ui.label(
-                        egui::RichText::new("● CLUTCH ACTIVE (Chatter Silenced)")
+                        egui::RichText::new(lang.clutch_active_status())
                             .strong()
                             .size(13.0)
                             .color(colors.accent),
                     );
                 } else {
                     ui.label(
-                        egui::RichText::new("○ Standing by (Normal)")
+                        egui::RichText::new(lang.clutch_idle_status())
                             .size(13.0)
                             .color(Color32::from_rgb(0, 240, 140)),
                     );

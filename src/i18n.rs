@@ -11,14 +11,21 @@ pub enum Language {
 
 impl Language {
     pub fn from_str(s: &str) -> Self {
-        match s.trim().to_lowercase().as_str() {
-            "spanish" | "español" => Self::Spanish,
-            "portuguese" | "português" => Self::Portuguese,
-            "korean" | "한국어" => Self::Korean,
-            "japanese" | "日本語" => Self::Japanese,
-            "chinese" | "简体中文" | "中文" => Self::Chinese,
-            "russian" | "русский" => Self::Russian,
-            _ => Self::English,
+        let low = s.trim().to_lowercase();
+        if low.contains("espan") || low.contains("spanish") {
+            Self::Spanish
+        } else if low.contains("portug") {
+            Self::Portuguese
+        } else if low.contains("korean") || low.contains("한국어") || low.contains("한국") {
+            Self::Korean
+        } else if low.contains("japan") || low.contains("日本語") || low.contains("日本") {
+            Self::Japanese
+        } else if low.contains("chinese") || low.contains("中文") {
+            Self::Chinese
+        } else if low.contains("russian") || low.contains("русск") {
+            Self::Russian
+        } else {
+            Self::English
         }
     }
 
@@ -52,8 +59,8 @@ impl Language {
             Self::English => "General",
             Self::Spanish => "General",
             Self::Portuguese => "Geral",
-            Self::Korean => "일반",
-            Self::Japanese => "一般",
+            Self::Korean => "일반 (General)",
+            Self::Japanese => "一般 (General)",
             Self::Chinese => "常规设置",
             Self::Russian => "Основные",
         }
@@ -226,7 +233,7 @@ impl Language {
             Self::Korean => "스마트 오디오 자동 덕킹 엔진",
             Self::Japanese => "スマート自動オーディオダッキング",
             Self::Chinese => "智能音频闪避引擎 (Smart Ducking)",
-            Self::Russian => "Движок автоприглушения фонового звука",
+            Self::Russian => "Движок автоприглушения звука",
         }
     }
 
@@ -238,7 +245,7 @@ impl Language {
             Self::Korean => "게임 내 발소리나 교전 총성이 발생하면 Spotify, Discord 볼륨을 자동으로 줄여줍니다.",
             Self::Japanese => "足音や銃声が発生すると、SpotifyやDiscordなどの音量を自動的に下げます。",
             Self::Chinese => "游戏中出现脚步声或交火枪声时，自动降低 Spotify、Discord 等后台音量。",
-            Self::Russian => "Снижает громкость фоновой музыки и Discord при звуках шагов и выстрелов.",
+            Self::Russian => "Снижает громкость музыки и Discord при звуках шагов и выстрелов.",
         }
     }
 
@@ -275,6 +282,42 @@ impl Language {
             Self::Japanese => "⚡ ダッキングテスト (3秒)",
             Self::Chinese => "⚡ 测试闪避 (3秒)",
             Self::Russian => "⚡ Тест приглушения (3 сек)",
+        }
+    }
+
+    pub fn engine_status(&self) -> &'static str {
+        match self {
+            Self::English => "Engine Status:",
+            Self::Spanish => "Estado del Motor:",
+            Self::Portuguese => "Status do Motor:",
+            Self::Korean => "엔진 상태:",
+            Self::Japanese => "エンジンの状態:",
+            Self::Chinese => "引擎状态:",
+            Self::Russian => "Статус движка:",
+        }
+    }
+
+    pub fn ducking_active_status(&self) -> &'static str {
+        match self {
+            Self::English => "● DUCKING ACTIVE (Audio Lowered)",
+            Self::Spanish => "● ATENUACIÓN ACTIVA (Audio Reducido)",
+            Self::Portuguese => "● ATENUAÇÃO ATIVA (Áudio Reduzido)",
+            Self::Korean => "● 덕킹 활성 중 (볼륨 감소됨)",
+            Self::Japanese => "● ダッキング有効 (音量減衰中)",
+            Self::Chinese => "● 正在闪避 (后台音量已降低)",
+            Self::Russian => "● ПРИГЛУШЕНИЕ АКТИВНО",
+        }
+    }
+
+    pub fn normal_volume_status(&self) -> &'static str {
+        match self {
+            Self::English => "○ Normal Volume (Idle)",
+            Self::Spanish => "○ Volumen Normal (Inactivo)",
+            Self::Portuguese => "○ Volume Normal (Inativo)",
+            Self::Korean => "○ 정상 볼륨 (대기 중)",
+            Self::Japanese => "○ 通常音量 (待機中)",
+            Self::Chinese => "○ 正常音量 (待机)",
+            Self::Russian => "○ Обычная громкость (Ожидание)",
         }
     }
 
@@ -364,6 +407,78 @@ impl Language {
         }
     }
 
+    pub fn trigger_mode(&self) -> &'static str {
+        match self {
+            Self::English => "Trigger Mode:",
+            Self::Spanish => "Modo de Activación:",
+            Self::Portuguese => "Modo de Ativação:",
+            Self::Korean => "동작 모드:",
+            Self::Japanese => "動作モード:",
+            Self::Chinese => "触发模式:",
+            Self::Russian => "Режим работы:",
+        }
+    }
+
+    pub fn hold_key_mode(&self) -> &'static str {
+        match self {
+            Self::English => "Hold Key",
+            Self::Spanish => "Mantener Presionado",
+            Self::Portuguese => "Segurar Tecla",
+            Self::Korean => "누르고 있기 (Hold)",
+            Self::Japanese => "長押し (Hold)",
+            Self::Chinese => "长按静音 (Hold)",
+            Self::Russian => "Удержание",
+        }
+    }
+
+    pub fn toggle_mode(&self) -> &'static str {
+        match self {
+            Self::English => "Toggle On/Off",
+            Self::Spanish => "Alternar On/Off",
+            Self::Portuguese => "Alternar Lig/Desl",
+            Self::Korean => "토글 (Toggle)",
+            Self::Japanese => "トグル切替",
+            Self::Chinese => "按一下切换 (Toggle)",
+            Self::Russian => "Переключение",
+        }
+    }
+
+    pub fn clutch_status(&self) -> &'static str {
+        match self {
+            Self::English => "Clutch Status:",
+            Self::Spanish => "Estado de Clutch:",
+            Self::Portuguese => "Status de Clutch:",
+            Self::Korean => "클러치 상태:",
+            Self::Japanese => "クラッチ状態:",
+            Self::Chinese => "残局模式状态:",
+            Self::Russian => "Статус Clutch:",
+        }
+    }
+
+    pub fn clutch_active_status(&self) -> &'static str {
+        match self {
+            Self::English => "● CLUTCH ACTIVE (Chatter Silenced)",
+            Self::Spanish => "● CLUTCH ACTIVO (Chat Silenciado)",
+            Self::Portuguese => "● CLUTCH ATIVO (Chat Silenciado)",
+            Self::Korean => "● 클러치 활성 (모든 대화 차단됨)",
+            Self::Japanese => "● クラッチ有効 (消音中)",
+            Self::Chinese => "● 残局模式已激活 (背景全静音)",
+            Self::Russian => "● CLUTCH АКТИВЕН (Звук выключен)",
+        }
+    }
+
+    pub fn clutch_idle_status(&self) -> &'static str {
+        match self {
+            Self::English => "○ Standing by (Normal)",
+            Self::Spanish => "○ En Espera (Normal)",
+            Self::Portuguese => "○ Em Espera (Normal)",
+            Self::Korean => "○ 대기 중 (정상)",
+            Self::Japanese => "○ 待機中 (通常)",
+            Self::Chinese => "○ 待机状态 (正常)",
+            Self::Russian => "○ Режим ожидания",
+        }
+    }
+
     pub fn test_clutch_btn(&self) -> &'static str {
         match self {
             Self::English => "Test Clutch Mode",
@@ -373,6 +488,68 @@ impl Language {
             Self::Japanese => "クラッチをテスト",
             Self::Chinese => "测试残局模式",
             Self::Russian => "Тест Clutch",
+        }
+    }
+
+    // App Mixer
+    pub fn mixer_desc(&self) -> &'static str {
+        match self {
+            Self::English => "Adjust individual application volumes and mute states in real-time:",
+            Self::Spanish => "Ajusta volúmenes y estados de silencio de aplicaciones en tiempo real:",
+            Self::Portuguese => "Ajuste volumes e mudo de aplicativos em tempo real:",
+            Self::Korean => "실시간으로 각 애플리케이션의 볼륨 및 음소거를 직접 제어합니다:",
+            Self::Japanese => "各アプリケーションの音量とミュートをリアルタイムで直接操作できます:",
+            Self::Chinese => "实时独立调节各应用程序的音量与静音状态：",
+            Self::Russian => "Управляйте громкостью и звуком приложений в реальном времени:",
+        }
+    }
+
+    // Specific Apps
+    pub fn specific_apps_title(&self) -> &'static str {
+        match self {
+            Self::English => "Applications to Automatically Duck",
+            Self::Spanish => "Aplicaciones para Atenuación Automática",
+            Self::Portuguese => "Aplicativos para Atenuação Automática",
+            Self::Korean => "자동 덕킹 대상 애플리케이션 목록",
+            Self::Japanese => "自動ダッキング対象アプリケーション",
+            Self::Chinese => "自动闪避目标应用程序列表",
+            Self::Russian => "Приложения для автоматического приглушения",
+        }
+    }
+
+    pub fn specific_apps_desc(&self) -> &'static str {
+        match self {
+            Self::English => "Select or add the applications SoundLock should silence/lower during gameplay:",
+            Self::Spanish => "Selecciona o añade las aplicaciones que SoundLock debe atenuar durante el juego:",
+            Self::Portuguese => "Selecione ou adicione os aplicativos que o SoundLock deve abaixar durante o jogo:",
+            Self::Korean => "게임 사운드 발생 시 SoundLock이 볼륨을 낮출 앱들을 선택하세요:",
+            Self::Japanese => "ゲーム音声発生時に音量を下げるアプリを選択または追加してください:",
+            Self::Chinese => "选择或添加在游戏交火时需要 SoundLock 自动压低音量的软件：",
+            Self::Russian => "Выберите или добавьте приложения, звук которых нужно приглушать:",
+        }
+    }
+
+    pub fn add_custom_exe(&self) -> &'static str {
+        match self {
+            Self::English => "Add Custom Executable (.exe):",
+            Self::Spanish => "Añadir Ejecutable Personalizado (.exe):",
+            Self::Portuguese => "Adicionar Executável Personalizado (.exe):",
+            Self::Korean => "사용자 지정 실행 파일 추가 (.exe):",
+            Self::Japanese => "カスタム実行ファイルを追加 (.exe):",
+            Self::Chinese => "添加自定义程序 (.exe)：",
+            Self::Russian => "Добавить программу (.exe):",
+        }
+    }
+
+    pub fn btn_add_app(&self) -> &'static str {
+        match self {
+            Self::English => "+ Add App",
+            Self::Spanish => "+ Añadir App",
+            Self::Portuguese => "+ Adicionar App",
+            Self::Korean => "+ 앱 추가",
+            Self::Japanese => "+ アプリ追加",
+            Self::Chinese => "+ 添加应用",
+            Self::Russian => "+ Добавить",
         }
     }
 }
