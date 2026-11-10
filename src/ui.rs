@@ -257,6 +257,8 @@ fn render_general_view(
                                     config.language = l.display_name().to_string();
                                     *lang = *l;
                                     let _ = config.save();
+                                    crate::setup_system_fonts(ui.ctx(), &config.language);
+                                    crate::trim_working_set();
                                 }
                             }
                         });

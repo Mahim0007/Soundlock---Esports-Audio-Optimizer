@@ -61,7 +61,7 @@ fn main() -> eframe::Result<()> {
         "SoundLock Suite",
         options,
         Box::new(|cc| {
-            setup_system_fonts(&cc.egui_ctx);
+            setup_system_fonts(&cc.egui_ctx, &config.language);
             let colors = theme::ThemeColors::new(&config.accent_hex);
             theme::apply_theme(&cc.egui_ctx, &colors);
             let updater = UpdateManager::new();
@@ -72,21 +72,28 @@ fn main() -> eframe::Result<()> {
                 updater,
                 ui_state: UiState::default(),
                 should_quit: false,
+                frame_count: 0,
+                last_trim: std::time::Instant::now(),
             })
         }),
     )
 }
 
-fn setup_system_fonts(ctx: &egui::Context) {
-    let mut fonts = egui::FontDefinitions::default();
+pub fn setup_system_fonts(ctx: &egui::Context, language: &str) {
+    let mut fonts = egui::FontDefinitions::empty();
+    let low = language.to_lowercase();
+    let is_cjk = low.contains("chinese") || low.contains("中文")
+        || low.contains("japan") || low.contains("日本")
+        || low.contains("korean") || low.contains("한국");
 
-    // Check Windows system fonts for CJK (Chinese, Japanese, Korean) and Cyrillic (Russian)
-    let candidates = [
-        r"C:\Windows\Fonts\msyh.ttc",
-        r"C:\Windows\Fonts\malgun.ttf",
-        r"C:\Windows\Fonts\segoeui.ttf",
-    ];
+    // On-demand lightweight font loading: only load heavy CJK font tables when using CJK
+    let candidates: &[&str] = if is_cjk {
+        &[r"C:\Windows\Fonts\msyh.ttc", r"C:\Windows\Fonts\segoeui.ttf"]
+    } else {
+        &[r"C:\Windows\Fonts\segoeui.ttf"]
+    };
 
+    let mut loaded_any = false;
     for path in candidates {
         if let Ok(bytes) = std::fs::read(path) {
             let name = std::path::Path::new(path)
@@ -105,10 +112,32 @@ fn setup_system_fonts(ctx: &egui::Context) {
                 .entry(egui::FontFamily::Monospace)
                 .or_default()
                 .push(name);
+            loaded_any = true;
         }
     }
 
+    if !loaded_any {
+        fonts = egui::FontDefinitions::default();
+    }
+
     ctx.set_fonts(fonts);
+}
+
+pub fn trim_working_set() {
+    #[cfg(windows)]
+    unsafe {
+        use windows::Win32::System::Threading::{GetCurrentProcess, SetProcessWorkingSetSize};
+        use windows::Win32::System::ProcessStatus::EmptyWorkingSet;
+        use windows::Win32::System::Memory::{GetProcessHeap, HeapCompact, HEAP_FLAGS};
+        if let Ok(heap) = GetProcessHeap() {
+            if !heap.is_invalid() {
+                let _ = HeapCompact(heap, HEAP_FLAGS(0));
+            }
+        }
+        let p = GetCurrentProcess();
+        let _ = EmptyWorkingSet(p);
+        let _ = SetProcessWorkingSetSize(p, usize::MAX, usize::MAX);
+    }
 }
 
 struct SoundLockApp {
@@ -118,6 +147,8 @@ struct SoundLockApp {
     updater: UpdateManager,
     ui_state: UiState,
     should_quit: bool,
+    frame_count: u32,
+    last_trim: std::time::Instant,
 }
 
 impl eframe::App for SoundLockApp {
@@ -139,10 +170,26 @@ impl eframe::App for SoundLockApp {
             &mut self.should_quit,
         );
 
-        // Adaptive frame pacing: 60 FPS when active or rebinding hotkeys, 100ms when idle
+        // Adaptive frame pacing: 60 FPS when active, 150ms when idle/focused, 1000ms in background
         let is_active = self.ui_state.is_recording_clutch_key
             || self.audio_engine.telemetry.lock().map_or(false, |t| t.is_ducking_active || t.is_game_running);
-        let repaint_ms = if is_active { 16 } else { 100 };
+        let is_focused = ctx.input(|i| i.focused);
+
+        let repaint_ms = if is_active {
+            16
+        } else if is_focused {
+            150
+        } else {
+            1000
+        };
         ctx.request_repaint_after(std::time::Duration::from_millis(repaint_ms));
+
+        // Aggressive RAM Optimization: trim working set after first frames and periodically when idle
+        self.frame_count = self.frame_count.saturating_add(1);
+        let idle_trim_secs = if is_focused { 3 } else { 1 };
+        if self.frame_count == 2 || self.frame_count == 5 || (self.last_trim.elapsed().as_secs() >= idle_trim_secs && !is_active) {
+            trim_working_set();
+            self.last_trim = std::time::Instant::now();
+        }
     }
 }
