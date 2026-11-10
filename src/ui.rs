@@ -218,49 +218,7 @@ fn render_general_view(
 
     ui.add_space(14.0);
 
-    // CARD 2: Accent Color Selector with Hex Pill & Swatches Strip (Matching Screenshot!)
-    egui::Frame::none()
-        .fill(colors.card_bg)
-        .stroke(Stroke::new(1.0_f32, colors.card_stroke))
-        .rounding(egui::Rounding::same(10.0))
-        .inner_margin(16.0)
-        .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(
-                    egui::RichText::new(lang.accent_color())
-                        .size(13.5)
-                        .color(colors.text_primary),
-                );
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let hex_frame = egui::Frame::none()
-                        .fill(Color32::from_rgb(18, 22, 32))
-                        .rounding(egui::Rounding::same(4.0))
-                        .inner_margin(egui::Margin::symmetric(8.0, 3.0));
-                    hex_frame.show(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            let (dot_rect, _) = ui.allocate_exact_size(Vec2::splat(8.0), egui::Sense::hover());
-                            ui.painter().rect_filled(dot_rect, egui::Rounding::ZERO, colors.accent);
-                            ui.label(
-                                egui::RichText::new(&config.accent_hex)
-                                    .monospace()
-                                    .size(11.0)
-                                    .color(colors.text_primary),
-                            );
-                        });
-                    });
-                });
-            });
-
-            ui.add_space(10.0);
-
-            if theme::color_palette_strip(ui, &mut config.accent_hex) {
-                let _ = config.save();
-            }
-        });
-
-    ui.add_space(14.0);
-
-    // CARD 3: Game Wallpaper / Target Status Card (Matching Screenshot Preview Area!)
+    // CARD 2: Game Wallpaper / Target Status Card (Matching Screenshot Preview Area!)
     egui::Frame::none()
         .fill(colors.card_bg)
         .stroke(Stroke::new(1.0_f32, colors.card_stroke))

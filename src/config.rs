@@ -73,6 +73,7 @@ impl AppConfig {
                         cfg.language = "English".to_string();
                         let _ = cfg.save();
                     }
+                    cfg.accent_hex = "#E3008C".to_string();
                     return cfg;
                 }
             }
