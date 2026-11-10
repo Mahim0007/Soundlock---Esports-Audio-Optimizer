@@ -412,18 +412,18 @@ fn render_ducking_view(
 
             ui.add_space(12.0);
 
-            // Trigger Sensitivity Slider with White Knob
+            // Trigger Sensitivity Slider with White Knob (Footsteps: 0.01 - 0.04)
             ui.label(
-                egui::RichText::new(lang.trigger_sensitivity_label())
+                egui::RichText::new(format!("{} ({:.1}% Sensitivity)", lang.trigger_sensitivity_label(), config.trigger_threshold * 100.0))
                     .size(13.0)
                     .color(colors.text_primary),
             );
             let resp = theme::white_knob_slider(
                 ui,
                 &mut config.trigger_threshold,
-                0.05,
-                0.60,
-                Some(0.01),
+                0.01,
+                0.25,
+                Some(0.005),
                 "",
                 3,
                 colors.accent,

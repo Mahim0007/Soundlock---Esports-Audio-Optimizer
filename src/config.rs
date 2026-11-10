@@ -33,7 +33,7 @@ impl Default for AppConfig {
             ducking_enabled: true,
             target_game: "Auto (Any Active Game)".to_string(),
             duck_level_percent: 20.0,
-            trigger_threshold: 0.08,
+            trigger_threshold: 0.025,
             fade_out_ms: 120,
             fade_in_ms: 250,
             clutch_hotkey: "Caps Lock".to_string(),
@@ -44,11 +44,17 @@ impl Default for AppConfig {
             target_duck_apps: vec![
                 "Spotify.exe".to_string(),
                 "Discord.exe".to_string(),
-                "Amazon Music.exe".to_string(),
-                "AppleMusic.exe".to_string(),
                 "chrome.exe".to_string(),
                 "brave.exe".to_string(),
                 "msedge.exe".to_string(),
+                "firefox.exe".to_string(),
+                "opera.exe".to_string(),
+                "opera_gx.exe".to_string(),
+                "arc.exe".to_string(),
+                "Amazon Music.exe".to_string(),
+                "AppleMusic.exe".to_string(),
+                "vlc.exe".to_string(),
+                "wmplayer.exe".to_string(),
             ],
             custom_apps: Vec::new(),
         }
@@ -73,8 +79,8 @@ impl AppConfig {
                         cfg.language = "English".to_string();
                         let _ = cfg.save();
                     }
-                    if cfg.trigger_threshold > 0.15 {
-                        cfg.trigger_threshold = 0.08;
+                    if cfg.trigger_threshold > 0.035 {
+                        cfg.trigger_threshold = 0.025;
                         let _ = cfg.save();
                     }
                     cfg.accent_hex = "#E3008C".to_string();

@@ -125,6 +125,7 @@ impl AudioEngine {
         let mut is_clutch_toggled = false;
         let mut was_clutch_key_down = false;
         let mut last_target_duck_apps: Vec<String> = Vec::new();
+        let mut last_duck_trigger_time: Option<Instant> = None;
 
         #[cfg(windows)]
         let mut session_mgr: Option<windows::Win32::Media::Audio::IAudioSessionManager2> = None;
@@ -208,7 +209,12 @@ impl AudioEngine {
             // 6. Decide whether audio ducking should trigger right now
             let is_test_active = test_ducking_until.map_or(false, |until| Instant::now() < until);
             let is_sound_trigger = config.ducking_enabled && is_game_active && (game_peak > config.trigger_threshold);
-            let should_duck = is_test_active || is_clutch_active || is_sound_trigger;
+            if is_sound_trigger {
+                last_duck_trigger_time = Some(Instant::now());
+            }
+            // Sustain/Hold window: keep ducking engaged for 2.5s after any footstep/gunshot
+            let is_hold_active = last_duck_trigger_time.map_or(false, |t| t.elapsed() < Duration::from_millis(2500));
+            let should_duck = is_test_active || is_clutch_active || is_hold_active;
 
             // Keep track of baseline volumes for apps ONLY when resting at 100% normal volume
             if !should_duck && (current_multiplier - 1.0).abs() < 1e-4 {
@@ -217,12 +223,12 @@ impl AudioEngine {
                 }
             }
 
-            // 7. Calculate duck multiplier with smooth easing
+            // 7. Calculate duck multiplier with smooth easing: Fast 40ms attack, gentle fade-in
             let duck_floor = (config.duck_level_percent / 100.0).clamp(0.0, 1.0);
             let target_multiplier = if should_duck { duck_floor } else { 1.0f32 };
 
             if (current_multiplier - target_multiplier).abs() > 0.01 {
-                let speed = if should_duck { 0.20 } else { 0.08 }; // Fast attack, smooth decay
+                let speed = if should_duck { 0.35 } else { 0.06 };
                 current_multiplier += (target_multiplier - current_multiplier) * speed;
             } else {
                 current_multiplier = target_multiplier;
