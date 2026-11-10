@@ -4,6 +4,7 @@ use crate::config::AppConfig;
 use crate::audio_engine::{AudioEngine, AudioEngineCommand, EngineTelemetry};
 use crate::theme::{self, ThemeColors};
 use crate::startup;
+use crate::i18n::Language;
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum Tab {
@@ -41,7 +42,7 @@ pub fn render_ui(
     ui_state: &mut UiState,
     should_quit: &mut bool,
 ) {
-    let is_bn = config.language == "Bengali";
+    let lang = Language::from_str(&config.language);
     let colors = ThemeColors::new(&config.accent_hex);
     theme::apply_theme(ctx, &colors);
 
@@ -64,18 +65,18 @@ pub fn render_ui(
                 .inner_margin(egui::Margin::symmetric(10.0, 14.0)),
         )
         .show(ctx, |ui| {
-            render_sidebar_tab(ui, active_tab, Tab::General, if is_bn { "সাধারণ" } else { "General" }, SidebarIcon::Gear, &colors);
-            render_sidebar_tab(ui, active_tab, Tab::SmartDucking, if is_bn { "স্মার্ট ডাকিং" } else { "Smart Ducking" }, SidebarIcon::Toolbar, &colors);
-            render_sidebar_tab(ui, active_tab, Tab::FootstepBooster, if is_bn { "ফুটস্টেপ বুস্টার" } else { "Footstep Booster" }, SidebarIcon::Window, &colors);
-            render_sidebar_tab(ui, active_tab, Tab::AppMixer, if is_bn { "অ্যাপ মিক্সার" } else { "App Mixer" }, SidebarIcon::Dock, &colors);
-            render_sidebar_tab(ui, active_tab, Tab::SpecificApps, if is_bn { "নির্দিষ্ট অ্যাপস" } else { "Specific Apps" }, SidebarIcon::Target, &colors);
-            render_sidebar_tab(ui, active_tab, Tab::Shortcuts, if is_bn { "শর্টকাটস" } else { "Shortcuts" }, SidebarIcon::Shortcuts, &colors);
-            render_sidebar_tab(ui, active_tab, Tab::Developer, if is_bn { "ডেভেলপার" } else { "Developer" }, SidebarIcon::Developer, &colors);
+            render_sidebar_tab(ui, active_tab, Tab::General, lang.tab_general(), SidebarIcon::Gear, &colors);
+            render_sidebar_tab(ui, active_tab, Tab::SmartDucking, lang.tab_ducking(), SidebarIcon::Toolbar, &colors);
+            render_sidebar_tab(ui, active_tab, Tab::FootstepBooster, lang.tab_booster(), SidebarIcon::Window, &colors);
+            render_sidebar_tab(ui, active_tab, Tab::AppMixer, lang.tab_mixer(), SidebarIcon::Dock, &colors);
+            render_sidebar_tab(ui, active_tab, Tab::SpecificApps, lang.tab_apps(), SidebarIcon::Target, &colors);
+            render_sidebar_tab(ui, active_tab, Tab::Shortcuts, lang.tab_shortcuts(), SidebarIcon::Shortcuts, &colors);
+            render_sidebar_tab(ui, active_tab, Tab::Developer, lang.tab_developer(), SidebarIcon::Developer, &colors);
 
             // Bottom Information Tab (matching screenshot)
             ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
                 ui.add_space(4.0);
-                render_sidebar_tab(ui, active_tab, Tab::Information, if is_bn { "তথ্য" } else { "Information" }, SidebarIcon::Info, &colors);
+                render_sidebar_tab(ui, active_tab, Tab::Information, lang.tab_info(), SidebarIcon::Info, &colors);
             });
         });
 
@@ -91,23 +92,15 @@ pub fn render_ui(
         .show(ctx, |ui| {
             // TOP HEADER: Section Title on left + "Cancel" & "Quit" on right
             ui.horizontal(|ui| {
-                let tab_title = match (*active_tab, is_bn) {
-                    (Tab::General, false) => "General",
-                    (Tab::General, true) => "সাধারণ সেটিংস (General)",
-                    (Tab::SmartDucking, false) => "Smart Ducking",
-                    (Tab::SmartDucking, true) => "স্মার্ট অডিও ডাকিং (Smart Ducking)",
-                    (Tab::FootstepBooster, false) => "Footstep Booster",
-                    (Tab::FootstepBooster, true) => "ফুটস্টেপ ফ্রিকোয়েন্সি বুস্টার",
-                    (Tab::AppMixer, false) => "App Mixer",
-                    (Tab::AppMixer, true) => "লাইভ অ্যাপ মিক্সার (App Mixer)",
-                    (Tab::SpecificApps, false) => "Specific Apps",
-                    (Tab::SpecificApps, true) => "টার্গেট অ্যাপস (Specific Apps)",
-                    (Tab::Shortcuts, false) => "Shortcuts",
-                    (Tab::Shortcuts, true) => "ক্ল্যাচ শর্টকাট কিবাইন্ড (Shortcuts)",
-                    (Tab::Developer, false) => "Developer & Telemetry",
-                    (Tab::Developer, true) => "ডেভেলপার ও সিস্টেম মেট্রিক্স",
-                    (Tab::Information, false) => "Information",
-                    (Tab::Information, true) => "অ্যাপ পরিচিতি ও সহায়িকা",
+                let tab_title = match *active_tab {
+                    Tab::General => lang.tab_general(),
+                    Tab::SmartDucking => lang.tab_ducking(),
+                    Tab::FootstepBooster => lang.tab_booster(),
+                    Tab::AppMixer => lang.tab_mixer(),
+                    Tab::SpecificApps => lang.tab_apps(),
+                    Tab::Shortcuts => lang.tab_shortcuts(),
+                    Tab::Developer => lang.tab_developer(),
+                    Tab::Information => lang.tab_info(),
                 };
 
                 ui.label(
@@ -120,7 +113,7 @@ pub fn render_ui(
                 // Right aligned action buttons matching screenshot
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let quit_btn = egui::Button::new(
-                        egui::RichText::new(if is_bn { "বন্ধ করুন" } else { "Quit" })
+                        egui::RichText::new(lang.btn_quit())
                             .strong()
                             .size(13.0)
                             .color(Color32::WHITE),
@@ -135,7 +128,7 @@ pub fn render_ui(
                     ui.add_space(8.0);
 
                     let cancel_btn = egui::Button::new(
-                        egui::RichText::new(if is_bn { "মিনিমাইজ" } else { "Cancel" })
+                        egui::RichText::new(lang.btn_cancel())
                             .size(13.0)
                             .color(colors.text_secondary),
                     )
@@ -153,14 +146,14 @@ pub fn render_ui(
             // RENDER SELECTED TAB
             egui::ScrollArea::vertical().show(ui, |ui| {
                 match *active_tab {
-                    Tab::General => render_general_view(ui, config, &colors, &telemetry, audio_engine, is_bn),
-                    Tab::SmartDucking => render_ducking_view(ui, config, &colors, &telemetry, audio_engine, is_bn),
-                    Tab::FootstepBooster => render_footstep_view(ui, config, &colors, is_bn),
-                    Tab::AppMixer => render_mixer_view(ui, &telemetry, audio_engine, config, &colors, is_bn),
-                    Tab::SpecificApps => render_specific_apps_view(ui, config, ui_state, &telemetry, audio_engine, &colors, is_bn),
-                    Tab::Shortcuts => render_shortcuts_view(ui, config, ui_state, &telemetry, audio_engine, &colors, is_bn),
-                    Tab::Developer => render_developer_view(ui, &telemetry, &colors, is_bn),
-                    Tab::Information => render_information_view(ui, &colors, is_bn),
+                    Tab::General => render_general_view(ui, config, &colors, &telemetry, audio_engine, lang),
+                    Tab::SmartDucking => render_ducking_view(ui, config, &colors, &telemetry, audio_engine, lang),
+                    Tab::FootstepBooster => render_footstep_view(ui, config, &colors, lang),
+                    Tab::AppMixer => render_mixer_view(ui, &telemetry, audio_engine, config, &colors),
+                    Tab::SpecificApps => render_specific_apps_view(ui, config, ui_state, &telemetry, audio_engine, &colors),
+                    Tab::Shortcuts => render_shortcuts_view(ui, config, ui_state, &telemetry, audio_engine, &colors, lang),
+                    Tab::Developer => render_developer_view(ui, &telemetry, &colors),
+                    Tab::Information => render_information_view(ui, &colors),
                 }
             });
         });
@@ -175,7 +168,7 @@ fn render_general_view(
     colors: &ThemeColors,
     telemetry: &EngineTelemetry,
     audio_engine: &AudioEngine,
-    is_bn: bool,
+    lang: Language,
 ) {
     // CARD 1: Run on startup & Language
     egui::Frame::none()
@@ -186,7 +179,7 @@ fn render_general_view(
         .show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.label(
-                    egui::RichText::new(if is_bn { "উইন্ডোজ স্টার্টআপে চালু হবে?" } else { "Run on startup?" })
+                    egui::RichText::new(lang.run_on_startup())
                         .size(13.5)
                         .color(colors.text_primary),
                 );
@@ -202,19 +195,19 @@ fn render_general_view(
 
             ui.horizontal(|ui| {
                 ui.label(
-                    egui::RichText::new(if is_bn { "ভাষা:" } else { "Language:" })
+                    egui::RichText::new(lang.language_label())
                         .size(13.5)
                         .color(colors.text_primary),
                 );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     egui::ComboBox::from_id_source("lang_combo")
-                        .selected_text(if config.language == "Bengali" { "বাংলা (Bengali)" } else { "English" })
+                        .selected_text(lang.display_name())
                         .show_ui(ui, |ui| {
-                            if ui.selectable_value(&mut config.language, "English".to_string(), "English").clicked() {
-                                let _ = config.save();
-                            }
-                            if ui.selectable_value(&mut config.language, "Bengali".to_string(), "বাংলা (Bengali)").clicked() {
-                                let _ = config.save();
+                            for l in Language::all() {
+                                if ui.selectable_label(config.language == l.display_name(), l.display_name()).clicked() {
+                                    config.language = l.display_name().to_string();
+                                    let _ = config.save();
+                                }
                             }
                         });
                 });
@@ -232,7 +225,7 @@ fn render_general_view(
         .show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.label(
-                    egui::RichText::new(if is_bn { "থিম কালার (Accent Color)" } else { "Accent Color" })
+                    egui::RichText::new(lang.accent_color())
                         .size(13.5)
                         .color(colors.text_primary),
                 );
@@ -298,14 +291,14 @@ fn render_general_view(
 
                 ui.vertical(|ui| {
                     ui.label(
-                        egui::RichText::new(if is_bn { "টার্গেট কম্পিটিটিভ গেম" } else { "Target Competitive Game" })
+                        egui::RichText::new(lang.target_game())
                             .strong()
                             .size(14.0)
                             .color(colors.text_primary),
                     );
                     ui.add_space(2.0);
                     ui.label(
-                        egui::RichText::new(format!("{}: {}", if is_bn { "বর্তমান গেম" } else { "Active" }, telemetry.detected_game))
+                        egui::RichText::new(format!("Active: {}", telemetry.detected_game))
                             .size(12.0)
                             .color(if telemetry.is_game_running { Color32::from_rgb(0, 240, 140) } else { colors.text_muted }),
                     );
@@ -347,7 +340,7 @@ fn render_ducking_view(
     colors: &ThemeColors,
     telemetry: &EngineTelemetry,
     audio_engine: &AudioEngine,
-    is_bn: bool,
+    lang: Language,
 ) {
     egui::Frame::none()
         .fill(colors.card_bg)
@@ -357,7 +350,7 @@ fn render_ducking_view(
         .show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.label(
-                    egui::RichText::new(if is_bn { "অটোমেটিক অডিও ডাকিং ইঞ্জিন" } else { "Automatic Audio Ducking Engine" })
+                    egui::RichText::new(lang.ducking_title())
                         .strong()
                         .size(15.0)
                         .color(colors.text_primary),
@@ -372,30 +365,18 @@ fn render_ducking_view(
 
             ui.add_space(8.0);
             ui.label(
-                egui::RichText::new(
-                    if is_bn {
-                        "গেমে গুরুত্বপূর্ণ সাউন্ড (ফুটস্টেপ/গোলাগুলি) আসলে স্বয়ংক্রিয়ভাবে Spotify, Discord বা Chrome এর সাউন্ড কমিয়ে দেবে।"
-                    } else {
-                        "Automatically lowers Spotify, Discord, or Chrome when competitive footsteps and gunshots occur."
-                    },
-                )
-                .size(12.5)
-                .color(colors.text_secondary),
+                egui::RichText::new(lang.ducking_desc())
+                    .size(12.5)
+                    .color(colors.text_secondary),
             );
 
             ui.add_space(16.0);
 
             // Duck Volume Level Slider with White Knob
             ui.label(
-                egui::RichText::new(
-                    if is_bn {
-                        "ডাকিং চলার সময় ব্যাকগ্রাউন্ড অ্যাপের ভলিউম:"
-                    } else {
-                        "Background App Volume when Ducked:"
-                    },
-                )
-                .size(13.0)
-                .color(colors.text_primary),
+                egui::RichText::new(lang.duck_volume_label())
+                    .size(13.0)
+                    .color(colors.text_primary),
             );
             if theme::white_knob_slider(
                 ui,
@@ -415,15 +396,9 @@ fn render_ducking_view(
 
             // Trigger Sensitivity Slider with White Knob
             ui.label(
-                egui::RichText::new(
-                    if is_bn {
-                        "গেম সাউন্ড ডিটেকশন সংবেদনশীলতা (Trigger Sensitivity):"
-                    } else {
-                        "Game Audio Trigger Sensitivity:"
-                    },
-                )
-                .size(13.0)
-                .color(colors.text_primary),
+                egui::RichText::new(lang.trigger_sensitivity_label())
+                    .size(13.0)
+                    .color(colors.text_primary),
             );
             if theme::white_knob_slider(
                 ui,
@@ -443,17 +418,17 @@ fn render_ducking_view(
 
             // Live Ducking Status Badge + Test Button
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(if is_bn { "ইঞ্জিন স্ট্যাটাস:" } else { "Engine Status:" }).size(13.0).color(colors.text_secondary));
+                ui.label(egui::RichText::new("Engine Status:").size(13.0).color(colors.text_secondary));
                 if telemetry.is_ducking_active {
                     ui.label(
-                        egui::RichText::new(if is_bn { "● ডাকিং অ্যাক্টিভ (ভলিউম কমানো হয়েছে)" } else { "● DUCKING ACTIVE (Audio Lowered)" })
+                        egui::RichText::new("● DUCKING ACTIVE (Audio Lowered)")
                             .strong()
                             .size(13.0)
                             .color(colors.accent),
                     );
                 } else {
                     ui.label(
-                        egui::RichText::new(if is_bn { "○ স্বাভাবিক (নরমাল ভলিউম)" } else { "○ Normal Volume (Idle)" })
+                        egui::RichText::new("○ Normal Volume (Idle)")
                             .size(13.0)
                             .color(Color32::from_rgb(0, 240, 140)),
                     );
@@ -461,7 +436,7 @@ fn render_ducking_view(
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let test_btn = egui::Button::new(
-                        egui::RichText::new(if is_bn { "⚡ ৩-সেকেন্ড ডাকিং টেস্ট করুন" } else { "⚡ Test Ducking (3 sec)" })
+                        egui::RichText::new(lang.test_ducking_btn())
                             .size(12.5)
                             .color(Color32::WHITE),
                     )
@@ -481,7 +456,7 @@ fn render_ducking_view(
 // ----------------------------------------------------
 // 3. FOOTSTEP BOOSTER TAB
 // ----------------------------------------------------
-fn render_footstep_view(ui: &mut egui::Ui, config: &mut AppConfig, colors: &ThemeColors, is_bn: bool) {
+fn render_footstep_view(ui: &mut egui::Ui, config: &mut AppConfig, colors: &ThemeColors, lang: Language) {
     egui::Frame::none()
         .fill(colors.card_bg)
         .stroke(Stroke::new(1.0_f32, colors.card_stroke))
@@ -490,7 +465,7 @@ fn render_footstep_view(ui: &mut egui::Ui, config: &mut AppConfig, colors: &Them
         .show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.label(
-                    egui::RichText::new(if is_bn { "ফুটস্টেপ অডিও ফ্রিকোয়েন্সি অপটিমাইজার" } else { "Footstep Audio Frequency Equalizer" })
+                    egui::RichText::new(lang.booster_title())
                         .strong()
                         .size(15.0)
                         .color(colors.text_primary),
@@ -504,22 +479,16 @@ fn render_footstep_view(ui: &mut egui::Ui, config: &mut AppConfig, colors: &Them
 
             ui.add_space(6.0);
             ui.label(
-                egui::RichText::new(
-                    if is_bn {
-                        "জুতার ঘষা, কাঠের ক্রিক এবং বোমা ডিফ্যুজের ২.৫ kHz – ৬.০ kHz ফ্রিকোয়েন্সি স্পষ্ট করে যাতে শত্রু সহজে ধরা পড়ে।"
-                    } else {
-                        "Amplifies high-mid frequencies (2.5 kHz – 6.0 kHz) where shoe scuffs, wood creaks, and bomb defuse clicks register."
-                    },
-                )
-                .size(12.5)
-                .color(colors.text_secondary),
+                egui::RichText::new("Amplifies high-mid frequencies (2.5 kHz – 6.0 kHz) where shoe scuffs, wood creaks, and bomb defuse clicks register.")
+                    .size(12.5)
+                    .color(colors.text_secondary),
             );
 
             ui.add_space(14.0);
 
             // Equalizer Gain Slider
             ui.label(
-                egui::RichText::new(if is_bn { "বুস্ট গেইন (Boost Gain):" } else { "Footstep Boost Gain:" })
+                egui::RichText::new(lang.booster_gain_label())
                     .size(13.0)
                     .color(colors.text_primary),
             );
@@ -541,15 +510,15 @@ fn render_footstep_view(ui: &mut egui::Ui, config: &mut AppConfig, colors: &Them
             // 3-Band Equalizer Cards
             ui.columns(3, |cols| {
                 cols[0].group(|ui| {
-                    ui.label(egui::RichText::new(if is_bn { "লো রাম্বল (বিস্ফোরণ)" } else { "Low Rumble (Explosions)" }).strong().size(12.0).color(colors.text_primary));
-                    ui.label(egui::RichText::new(if is_bn { "কমানো (-4 dB)" } else { "Dampened (-4 dB)" }).small().color(colors.text_muted));
+                    ui.label(egui::RichText::new("Low Rumble (Explosions)").strong().size(12.0).color(colors.text_primary));
+                    ui.label(egui::RichText::new("Dampened (-4 dB)").small().color(colors.text_muted));
                 });
                 cols[1].group(|ui| {
-                    ui.label(egui::RichText::new(if is_bn { "ভয়েস / চ্যাট (Discord)" } else { "Voice / Mid (Discord)" }).strong().size(12.0).color(colors.text_primary));
-                    ui.label(egui::RichText::new(if is_bn { "স্বাভাবিক (0 dB)" } else { "Neutral (0 dB)" }).small().color(colors.text_muted));
+                    ui.label(egui::RichText::new("Voice / Mid (Discord)").strong().size(12.0).color(colors.text_primary));
+                    ui.label(egui::RichText::new("Neutral (0 dB)").small().color(colors.text_muted));
                 });
                 cols[2].group(|ui| {
-                    ui.label(egui::RichText::new(if is_bn { "ফুটস্টেপ (২.৫-৬ kHz)" } else { "Footsteps (2-6 kHz)" }).strong().size(12.0).color(colors.accent));
+                    ui.label(egui::RichText::new("Footsteps (2-6 kHz)").strong().size(12.0).color(colors.accent));
                     ui.label(egui::RichText::new(format!("+{} dB Boost", config.footstep_boost_db)).small().color(colors.accent));
                 });
             });
@@ -558,7 +527,7 @@ fn render_footstep_view(ui: &mut egui::Ui, config: &mut AppConfig, colors: &Them
 
             // Windows Sound Enhancements Launcher Button
             let win_eq_btn = egui::Button::new(
-                egui::RichText::new(if is_bn { "🎛 উইন্ডোজ সাউন্ড প্যানেল ও লাউডনেস ইকুয়ালাইজার খুলুন" } else { "🎛 Open Windows Loudness Equalization Settings" })
+                egui::RichText::new(lang.open_sound_panel_btn())
                     .size(12.5)
                     .color(colors.text_primary),
             )
@@ -580,7 +549,6 @@ fn render_mixer_view(
     audio_engine: &AudioEngine,
     config: &mut AppConfig,
     colors: &ThemeColors,
-    is_bn: bool,
 ) {
     egui::Frame::none()
         .fill(colors.card_bg)
@@ -589,14 +557,14 @@ fn render_mixer_view(
         .inner_margin(16.0)
         .show(ui, |ui| {
             ui.label(
-                egui::RichText::new(if is_bn { "উইন্ডোজ রিয়েল-টাইম অডিও মিক্সার" } else { "Active Windows Audio Sessions & Mixer" })
+                egui::RichText::new("Active Windows Audio Sessions & Mixer")
                     .strong()
                     .size(15.0)
                     .color(colors.text_primary),
             );
             ui.add_space(4.0);
             ui.label(
-                egui::RichText::new(if is_bn { "সরাসরি এখান থেকেই যেকোনো অ্যাপের ভলিউম ও মিউট নিয়ন্ত্রণ করুন:" } else { "Adjust individual application volumes and mute states in real-time:" })
+                egui::RichText::new("Adjust individual application volumes and mute states in real-time:")
                     .size(12.0)
                     .color(colors.text_secondary),
             );
@@ -604,7 +572,7 @@ fn render_mixer_view(
 
             if telemetry.active_apps.is_empty() {
                 ui.label(
-                    egui::RichText::new(if is_bn { "বর্তমানে সাউন্ড বাজাচ্ছে এমন কোনো অ্যাপ পাওয়া যায়নি।" } else { "No active audio sessions currently playing sound." })
+                    egui::RichText::new("No active audio sessions currently playing sound.")
                         .size(12.5)
                         .color(colors.text_muted),
                 );
@@ -616,16 +584,12 @@ fn render_mixer_view(
                             ui.label(egui::RichText::new(&app.name).strong().size(13.0).color(colors.text_primary));
 
                             if app.is_target_duck {
-                                ui.label(egui::RichText::new(if is_bn { "[ডাকিং টার্গেট]" } else { "[Ducking Target]" }).small().color(colors.accent));
+                                ui.label(egui::RichText::new("[Ducking Target]").small().color(colors.accent));
                             }
 
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                 // Mute / Unmute Button
-                                let mute_text = if app.is_muted {
-                                    if is_bn { "🔇 আনমিউট" } else { "🔇 Unmute" }
-                                } else {
-                                    if is_bn { "🔊 মিউট" } else { "🔊 Mute" }
-                                };
+                                let mute_text = if app.is_muted { "🔇 Unmute" } else { "🔊 Mute" };
                                 if ui.button(mute_text).clicked() {
                                     audio_engine.send_command(AudioEngineCommand::SetAppMute {
                                         pid: app.pid,
@@ -636,11 +600,7 @@ fn render_mixer_view(
                                 ui.add_space(8.0);
 
                                 // Toggle Ducking Target button
-                                let duck_action_text = if app.is_target_duck {
-                                    if is_bn { "ডাকিং বাদ দিন" } else { "Remove Duck" }
-                                } else {
-                                    if is_bn { "+ ডাকিং করুন" } else { "+ Auto Duck" }
-                                };
+                                let duck_action_text = if app.is_target_duck { "Remove Duck" } else { "+ Auto Duck" };
                                 if ui.button(duck_action_text).clicked() {
                                     if app.is_target_duck {
                                         config.target_duck_apps.retain(|a| !a.eq_ignore_ascii_case(&app.name));
@@ -661,7 +621,7 @@ fn render_mixer_view(
                         ui.horizontal(|ui| {
                             // Volume Slider
                             let mut vol = (app.volume * 100.0).round();
-                            ui.label(egui::RichText::new(if is_bn { "ভলিউম:" } else { "Vol:" }).size(12.0).color(colors.text_secondary));
+                            ui.label(egui::RichText::new("Vol:").size(12.0).color(colors.text_secondary));
                             if theme::white_knob_slider(
                                 ui,
                                 &mut vol,
@@ -703,7 +663,6 @@ fn render_specific_apps_view(
     telemetry: &EngineTelemetry,
     audio_engine: &AudioEngine,
     colors: &ThemeColors,
-    is_bn: bool,
 ) {
     egui::Frame::none()
         .fill(colors.card_bg)
@@ -712,27 +671,21 @@ fn render_specific_apps_view(
         .inner_margin(16.0)
         .show(ui, |ui| {
             ui.label(
-                egui::RichText::new(if is_bn { "অটোমেটিক ডাকিংয়ের টার্গেট অ্যাপসমূহ" } else { "Applications to Automatically Duck" })
+                egui::RichText::new("Applications to Automatically Duck")
                     .strong()
                     .size(15.0)
                     .color(colors.text_primary),
             );
             ui.add_space(6.0);
             ui.label(
-                egui::RichText::new(
-                    if is_bn {
-                        "গেমে সাউন্ড আসলে যেসব অ্যাপের ভলিউম অটো কমে যাবে তা সিলেক্ট করুন:"
-                    } else {
-                        "Select or add the applications SoundLock should silence/lower during gameplay:"
-                    },
-                )
-                .size(12.5)
-                .color(colors.text_secondary),
+                egui::RichText::new("Select or add the applications SoundLock should silence/lower during gameplay:")
+                    .size(12.5)
+                    .color(colors.text_secondary),
             );
 
             ui.add_space(14.0);
 
-            // Preset Presets
+            // Presets including Amazon Music and Apple Music!
             let presets = [
                 "Spotify.exe",
                 "Discord.exe",
@@ -770,7 +723,7 @@ fn render_specific_apps_view(
             ui.separator();
             ui.add_space(8.0);
             ui.label(
-                egui::RichText::new(if is_bn { "কাস্টম অ্যাপ যোগ করুন (.exe):" } else { "Add Custom Executable:" })
+                egui::RichText::new("Add Custom Executable:")
                     .strong()
                     .size(13.0)
                     .color(colors.text_primary),
@@ -778,7 +731,7 @@ fn render_specific_apps_view(
 
             ui.horizontal(|ui| {
                 ui.text_edit_singleline(&mut ui_state.custom_app_input);
-                let add_btn = egui::Button::new(if is_bn { "+ অ্যাপ যোগ করুন" } else { "+ Add App" })
+                let add_btn = egui::Button::new("+ Add App")
                     .fill(Color32::from_rgb(32, 42, 60))
                     .rounding(egui::Rounding::same(6.0));
 
@@ -811,7 +764,7 @@ fn render_specific_apps_view(
             if !non_ducked_running.is_empty() {
                 ui.add_space(10.0);
                 ui.label(
-                    egui::RichText::new(if is_bn { "চলমান ব্যাকগ্রাউন্ড অ্যাপস থেকে এক ক্লিকে যোগ করুন:" } else { "Detected Active Apps (Click to add):" })
+                    egui::RichText::new("Detected Active Apps (Click to add):")
                         .size(12.0)
                         .color(colors.text_secondary),
                 );
@@ -838,7 +791,7 @@ fn render_shortcuts_view(
     telemetry: &EngineTelemetry,
     audio_engine: &AudioEngine,
     colors: &ThemeColors,
-    is_bn: bool,
+    lang: Language,
 ) {
     egui::Frame::none()
         .fill(colors.card_bg)
@@ -847,22 +800,16 @@ fn render_shortcuts_view(
         .inner_margin(16.0)
         .show(ui, |ui| {
             ui.label(
-                egui::RichText::new(if is_bn { "ক্ল্যাচ মোড কিবাইন্ডস (Clutch Mode Keybinds)" } else { "Clutch Mode Keybinds" })
+                egui::RichText::new(lang.clutch_title())
                     .strong()
                     .size(15.0)
                     .color(colors.text_primary),
             );
             ui.add_space(8.0);
             ui.label(
-                egui::RichText::new(
-                    if is_bn {
-                        "১v৩ বা হাড্ডাহাড্ডি ক্লাচ রাউন্ডের সময় একটি বোতাম চাপলেই ব্যাকগ্রাউন্ডের সব চ্যাট বা মিউজিক তাৎক্ষণিক বন্ধ হয়ে যাবে:"
-                    } else {
-                        "Instantly silences or ducks all background chatter with a single keypress during 1v3 clutch rounds:"
-                    },
-                )
-                .size(12.5)
-                .color(colors.text_secondary),
+                egui::RichText::new(lang.clutch_desc())
+                    .size(12.5)
+                    .color(colors.text_secondary),
             );
 
             ui.add_space(16.0);
@@ -870,13 +817,13 @@ fn render_shortcuts_view(
             // Clickable Hotkey Binder Box (Matching Screenshot Style)
             ui.horizontal(|ui| {
                 ui.label(
-                    egui::RichText::new(if is_bn { "ইমার্জেন্সি ক্লাচ কি:" } else { "Emergency Clutch Key:" })
+                    egui::RichText::new(lang.clutch_key_label())
                         .size(13.0)
                         .color(colors.text_primary),
                 );
 
                 let key_text = if ui_state.is_recording_clutch_key {
-                    if is_bn { "🔴 কিবোর্ড বা মাউসের যেকোনো কি চাপুন..." } else { "🔴 Press any key or mouse button..." }
+                    lang.press_any_key()
                 } else {
                     &config.clutch_hotkey
                 };
@@ -902,16 +849,16 @@ fn render_shortcuts_view(
 
             // Mode Selector: Hold to Duck vs Press to Toggle
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(if is_bn { "ট্রিগার মোড:" } else { "Trigger Mode:" }).size(12.5).color(colors.text_secondary));
+                ui.label(egui::RichText::new("Trigger Mode:").size(12.5).color(colors.text_secondary));
 
-                if ui.radio_value(&mut config.clutch_hold_mode, true, if is_bn { "কি চেপে ধরলে (Hold)" } else { "Hold Key" }).clicked() {
+                if ui.radio_value(&mut config.clutch_hold_mode, true, "Hold Key").clicked() {
                     audio_engine.update_config(config);
                     let _ = config.save();
                 }
 
                 ui.add_space(10.0);
 
-                if ui.radio_value(&mut config.clutch_hold_mode, false, if is_bn { "একবার চাপলে অন/অফ (Toggle)" } else { "Toggle On/Off" }).clicked() {
+                if ui.radio_value(&mut config.clutch_hold_mode, false, "Toggle On/Off").clicked() {
                     audio_engine.update_config(config);
                     let _ = config.save();
                 }
@@ -921,18 +868,18 @@ fn render_shortcuts_view(
 
             // Live Clutch Status & Manual Toggle Test
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(if is_bn { "ক্লাচ স্ট্যাটাস:" } else { "Clutch Status:" }).size(13.0).color(colors.text_secondary));
+                ui.label(egui::RichText::new("Clutch Status:").size(13.0).color(colors.text_secondary));
 
                 if telemetry.is_clutch_active {
                     ui.label(
-                        egui::RichText::new(if is_bn { "● ক্লাচ অ্যাক্টিভ (সব চ্যাট সাইলেন্ট)" } else { "● CLUTCH ACTIVE (Chatter Silenced)" })
+                        egui::RichText::new("● CLUTCH ACTIVE (Chatter Silenced)")
                             .strong()
                             .size(13.0)
                             .color(colors.accent),
                     );
                 } else {
                     ui.label(
-                        egui::RichText::new(if is_bn { "○ রেডি (স্বাভাবিক)" } else { "○ Standing by (Normal)" })
+                        egui::RichText::new("○ Standing by (Normal)")
                             .size(13.0)
                             .color(Color32::from_rgb(0, 240, 140)),
                     );
@@ -940,7 +887,7 @@ fn render_shortcuts_view(
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let clutch_toggle_btn = egui::Button::new(
-                        egui::RichText::new(if is_bn { "ক্ল্যাচ মোড টেস্ট করুন" } else { "Test Clutch Mode" })
+                        egui::RichText::new(lang.test_clutch_btn())
                             .size(12.5)
                             .color(Color32::WHITE),
                     )
@@ -958,7 +905,7 @@ fn render_shortcuts_view(
 // ----------------------------------------------------
 // 7. DEVELOPER & TELEMETRY TAB (0.00% CPU Benchmark)
 // ----------------------------------------------------
-fn render_developer_view(ui: &mut egui::Ui, telemetry: &EngineTelemetry, colors: &ThemeColors, is_bn: bool) {
+fn render_developer_view(ui: &mut egui::Ui, telemetry: &EngineTelemetry, colors: &ThemeColors) {
     egui::Frame::none()
         .fill(colors.card_bg)
         .stroke(Stroke::new(1.0_f32, colors.card_stroke))
@@ -966,7 +913,7 @@ fn render_developer_view(ui: &mut egui::Ui, telemetry: &EngineTelemetry, colors:
         .inner_margin(16.0)
         .show(ui, |ui| {
             ui.label(
-                egui::RichText::new(if is_bn { "ইস্পোর্টস আর্কিটেকচার ও রিয়েল-টাইম মেট্রিক্স" } else { "Esports Architecture Telemetry" })
+                egui::RichText::new("Esports Architecture Telemetry")
                     .strong()
                     .size(15.0)
                     .color(colors.text_primary),
@@ -974,28 +921,28 @@ fn render_developer_view(ui: &mut egui::Ui, telemetry: &EngineTelemetry, colors:
             ui.add_space(12.0);
 
             let (tier_label, tier_color) = match telemetry.cpu_tier {
-                1 => (if is_bn { "টায়ার ১: হাই-পারফরম্যান্স গেম ব্যাটল (16ms)" } else { "Tier 1: High-Performance Esports Battle (16ms)" }, colors.accent),
-                2 => (if is_bn { "টায়ার ২: ব্যাকগ্রাউন্ড / লবি স্ট্যান্ডবাই (60ms)" } else { "Tier 2: Background / Lobby Standby (60ms)" }, Color32::from_rgb(0, 220, 255)),
-                _ => (if is_bn { "টায়ার ৩: জিরো-পাওয়ার হাইবারনেশন (250ms, 0.00% CPU)" } else { "Tier 3: Zero-Power Hibernation (250ms, 0.00% CPU)" }, Color32::from_rgb(0, 240, 140)),
+                1 => ("Tier 1: High-Performance Esports Battle (16ms)", colors.accent),
+                2 => ("Tier 2: Background / Lobby Standby (60ms)", Color32::from_rgb(0, 220, 255)),
+                _ => ("Tier 3: Zero-Power Hibernation (250ms, 0.00% CPU)", Color32::from_rgb(0, 240, 140)),
             };
 
             ui.label(
-                egui::RichText::new(format!("{}: {}", if is_bn { "সিপিইউ শিডিউলিং মোড" } else { "Active Scheduling State" }, tier_label))
+                egui::RichText::new(format!("Active Scheduling State: {}", tier_label))
                     .strong()
                     .size(13.0)
                     .color(tier_color),
             );
             ui.add_space(6.0);
-            ui.label(egui::RichText::new(format!("{}: {:.2}", if is_bn { "গেম অডিও পিক লেভেল" } else { "Game Audio Peak Level" }, telemetry.game_peak_level)).size(12.5).color(colors.text_secondary));
-            ui.label(egui::RichText::new(format!("{}: {:.2}x", if is_bn { "ভলিউম মাল্টিপ্লায়ার" } else { "Volume Ducking Multiplier" }, telemetry.current_duck_multiplier)).size(12.5).color(colors.text_secondary));
-            ui.label(egui::RichText::new(format!("{}: {}", if is_bn { "অ্যাক্টিভ অডিও সেশন সংখ্যা" } else { "Active Windows Audio Sessions" }, telemetry.active_apps.len())).size(12.5).color(colors.text_secondary));
+            ui.label(egui::RichText::new(format!("Game Audio Peak Level: {:.2}", telemetry.game_peak_level)).size(12.5).color(colors.text_secondary));
+            ui.label(egui::RichText::new(format!("Volume Ducking Multiplier: {:.2}x", telemetry.current_duck_multiplier)).size(12.5).color(colors.text_secondary));
+            ui.label(egui::RichText::new(format!("Active Windows Audio Sessions: {}", telemetry.active_apps.len())).size(12.5).color(colors.text_secondary));
         });
 }
 
 // ----------------------------------------------------
 // 8. INFORMATION TAB
 // ----------------------------------------------------
-fn render_information_view(ui: &mut egui::Ui, colors: &ThemeColors, is_bn: bool) {
+fn render_information_view(ui: &mut egui::Ui, colors: &ThemeColors) {
     egui::Frame::none()
         .fill(colors.card_bg)
         .stroke(Stroke::new(1.0_f32, colors.card_stroke))
@@ -1005,21 +952,15 @@ fn render_information_view(ui: &mut egui::Ui, colors: &ThemeColors, is_bn: bool)
             ui.label(egui::RichText::new("SoundLock Suite v0.1.0").strong().size(18.0).color(colors.accent));
             ui.add_space(4.0);
             ui.label(
-                egui::RichText::new(if is_bn { "স্মার্ট গেম-অডিও অপটিমাইজার ও ব্যাকগ্রাউন্ড ডাক ডাকার" } else { "Esports-Grade Smart Game-Audio Ducking & Footstep Booster" })
+                egui::RichText::new("Esports-Grade Smart Game-Audio Ducking & Footstep Booster")
                     .size(13.0)
                     .color(colors.text_primary),
             );
             ui.add_space(10.0);
             ui.label(
-                egui::RichText::new(
-                    if is_bn {
-                        "১০০% পিওর রাস্টে (Rust) তৈরি এবং সরাসরি উইন্ডোজ WASAPI এর সাথে সংযুক্ত। গেমের FPS একটুও না কমিয়ে মিলি-সেকেন্ডে ব্যাকগ্রাউন্ড নয়েজ কমায়।"
-                    } else {
-                        "Engineered 100% in pure Rust with native WASAPI integration for sub-millisecond reaction and zero game FPS drop."
-                    },
-                )
-                .size(12.5)
-                .color(colors.text_secondary),
+                egui::RichText::new("Engineered 100% in pure Rust with native WASAPI integration for sub-millisecond reaction and zero game FPS drop.")
+                    .size(12.5)
+                    .color(colors.text_secondary),
             );
         });
 }
@@ -1033,7 +974,6 @@ fn capture_key_press(
     ui_state: &mut UiState,
     audio_engine: &AudioEngine,
 ) {
-    // 1. Check egui keyboard events
     let mut detected: Option<String> = None;
 
     ctx.input(|i| {
@@ -1090,7 +1030,6 @@ fn capture_key_press(
         }
     });
 
-    // 2. Check native Windows special keys (Caps Lock, Mouse 4, Mouse 5, Alt, Shift, Ctrl)
     #[cfg(windows)]
     if detected.is_none() {
         use windows::Win32::UI::Input::KeyboardAndMouse::*;

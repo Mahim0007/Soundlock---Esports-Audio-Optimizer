@@ -68,7 +68,11 @@ impl AppConfig {
         let path = Self::config_path();
         if path.exists() {
             if let Ok(content) = fs::read_to_string(&path) {
-                if let Ok(cfg) = serde_json::from_str(&content) {
+                if let Ok(mut cfg) = serde_json::from_str::<AppConfig>(&content) {
+                    if cfg.language.eq_ignore_ascii_case("bengali") {
+                        cfg.language = "English".to_string();
+                        let _ = cfg.save();
+                    }
                     return cfg;
                 }
             }

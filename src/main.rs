@@ -5,6 +5,7 @@ pub mod theme;
 pub mod audio_engine;
 pub mod ui;
 pub mod startup;
+pub mod i18n;
 
 use config::AppConfig;
 use audio_engine::AudioEngine;
@@ -58,6 +59,7 @@ fn main() -> eframe::Result<()> {
         "SoundLock Suite",
         options,
         Box::new(|cc| {
+            setup_system_fonts(&cc.egui_ctx);
             let colors = theme::ThemeColors::new(&config.accent_hex);
             theme::apply_theme(&cc.egui_ctx, &colors);
             Box::new(SoundLockApp {
@@ -69,6 +71,40 @@ fn main() -> eframe::Result<()> {
             })
         }),
     )
+}
+
+fn setup_system_fonts(ctx: &egui::Context) {
+    let mut fonts = egui::FontDefinitions::default();
+
+    // Check Windows system fonts for CJK (Chinese, Japanese, Korean) and Cyrillic (Russian)
+    let candidates = [
+        r"C:\Windows\Fonts\msyh.ttc",
+        r"C:\Windows\Fonts\malgun.ttf",
+        r"C:\Windows\Fonts\segoeui.ttf",
+    ];
+
+    for path in candidates {
+        if let Ok(bytes) = std::fs::read(path) {
+            let name = std::path::Path::new(path)
+                .file_stem()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
+            fonts.font_data.insert(name.clone(), egui::FontData::from_owned(bytes));
+            fonts
+                .families
+                .entry(egui::FontFamily::Proportional)
+                .or_default()
+                .push(name.clone());
+            fonts
+                .families
+                .entry(egui::FontFamily::Monospace)
+                .or_default()
+                .push(name);
+        }
+    }
+
+    ctx.set_fonts(fonts);
 }
 
 struct SoundLockApp {
