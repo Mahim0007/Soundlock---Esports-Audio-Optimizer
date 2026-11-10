@@ -28,12 +28,16 @@ fn main() -> eframe::Result<()> {
         }
     };
 
-    let vp = egui::ViewportBuilder::default()
+    let mut vp = egui::ViewportBuilder::default()
         .with_inner_size([720.0, 470.0])
         .with_min_inner_size([640.0, 420.0])
         .with_title("SoundLock - Esports Audio Optimizer")
         .with_decorations(true)
         .with_transparent(false);
+
+    if let Ok(icon_data) = eframe::icon_data::from_png_bytes(include_bytes!("../app_icon_256.png")) {
+        vp = vp.with_icon(icon_data);
+    }
 
     let options = eframe::NativeOptions {
         viewport: vp,
