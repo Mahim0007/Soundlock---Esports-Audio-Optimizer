@@ -91,6 +91,110 @@ pub fn toggle_switch(ui: &mut egui::Ui, value: &mut bool, accent: Color32) -> eg
     response
 }
 
+/// Custom Slider with solid White Knob Background ("scrool button background shada")
+pub fn white_knob_slider(
+    ui: &mut egui::Ui,
+    value: &mut f32,
+    min: f32,
+    max: f32,
+    step: Option<f32>,
+    suffix: &str,
+    decimals: usize,
+    accent: Color32,
+) -> egui::Response {
+    let rail_width = 180.0_f32;
+    let rail_height = 6.0_f32;
+    let knob_radius = 8.5_f32;
+    let value_pill_width = 54.0_f32;
+    let total_width = rail_width + 14.0 + value_pill_width;
+    let total_height = 24.0_f32;
+
+    let (rect, mut response) = ui.allocate_exact_size(Vec2::new(total_width, total_height), egui::Sense::click_and_drag());
+
+    let rail_min_x = rect.min.x + knob_radius;
+    let rail_max_x = rect.min.x + rail_width - knob_radius;
+    let rail_len = (rail_max_x - rail_min_x).max(1.0);
+    let center_y = rect.center().y;
+
+    if response.hovered() || response.dragged() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+
+    if response.clicked() || response.dragged() {
+        if let Some(mouse_pos) = response.interact_pointer_pos() {
+            let t = ((mouse_pos.x - rail_min_x) / rail_len).clamp(0.0, 1.0);
+            let mut new_val = min + t * (max - min);
+            if let Some(s) = step {
+                new_val = (new_val / s).round() * s;
+            }
+            new_val = new_val.clamp(min, max);
+            if (*value - new_val).abs() > 1e-5 {
+                *value = new_val;
+                response.mark_changed();
+            }
+        }
+    }
+
+    let t = ((*value - min) / (max - min)).clamp(0.0, 1.0);
+    let knob_x = rail_min_x + t * rail_len;
+    let knob_center = Pos2::new(knob_x, center_y);
+
+    let painter = ui.painter();
+
+    // 1. Draw rail background track
+    let rail_rect = egui::Rect::from_min_max(
+        Pos2::new(rail_min_x, center_y - rail_height * 0.5),
+        Pos2::new(rail_max_x, center_y + rail_height * 0.5),
+    );
+    painter.rect_filled(rail_rect, egui::Rounding::same(rail_height * 0.5), Color32::from_rgb(38, 44, 60));
+
+    // 2. Draw active trailing fill
+    if knob_x > rail_min_x {
+        let active_rail = egui::Rect::from_min_max(
+            Pos2::new(rail_min_x, center_y - rail_height * 0.5),
+            Pos2::new(knob_x, center_y + rail_height * 0.5),
+        );
+        painter.rect_filled(active_rail, egui::Rounding::same(rail_height * 0.5), accent);
+    }
+
+    // 3. Draw WHITE KNOB (solid white background scroll button!)
+    painter.circle_filled(
+        Pos2::new(knob_center.x, knob_center.y + 1.2),
+        knob_radius,
+        Color32::from_rgba_unmultiplied(0, 0, 0, 80),
+    );
+    // PURE WHITE FILL
+    painter.circle_filled(knob_center, knob_radius, Color32::WHITE);
+    // Sleek border
+    let border_color = if response.dragged() {
+        accent
+    } else if response.hovered() {
+        Color32::from_rgb(255, 120, 200)
+    } else {
+        Color32::from_rgb(215, 222, 235)
+    };
+    painter.circle_stroke(knob_center, knob_radius, Stroke::new(1.8_f32, border_color));
+
+    // 4. Value Pill on the right
+    let pill_rect = egui::Rect::from_min_size(
+        Pos2::new(rect.min.x + rail_width + 12.0, center_y - 11.0),
+        Vec2::new(value_pill_width, 22.0),
+    );
+    painter.rect_filled(pill_rect, egui::Rounding::same(5.0), Color32::from_rgb(20, 24, 34));
+    painter.rect_stroke(pill_rect, egui::Rounding::same(5.0), Stroke::new(1.0_f32, Color32::from_rgb(45, 52, 70)));
+
+    let val_str = format!("{:.*}{}", decimals, *value, suffix);
+    painter.text(
+        pill_rect.center(),
+        egui::Align2::CENTER_CENTER,
+        val_str,
+        egui::FontId::proportional(12.0),
+        Color32::from_rgb(240, 244, 255),
+    );
+
+    response
+}
+
 /// Accent Color Palette Swatches matching screenshot
 pub fn color_palette_strip(ui: &mut egui::Ui, current_hex: &mut String) -> bool {
     let swatches = [

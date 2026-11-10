@@ -385,7 +385,7 @@ fn render_ducking_view(
 
             ui.add_space(16.0);
 
-            // Duck Volume Level Slider
+            // Duck Volume Level Slider with White Knob
             ui.label(
                 egui::RichText::new(
                     if is_bn {
@@ -397,14 +397,23 @@ fn render_ducking_view(
                 .size(13.0)
                 .color(colors.text_primary),
             );
-            if ui.add(egui::Slider::new(&mut config.duck_level_percent, 0.0..=60.0).suffix("%").step_by(5.0)).changed() {
+            if theme::white_knob_slider(
+                ui,
+                &mut config.duck_level_percent,
+                0.0,
+                60.0,
+                Some(5.0),
+                "%",
+                1,
+                colors.accent,
+            ).changed() {
                 audio_engine.update_config(config);
                 let _ = config.save();
             }
 
             ui.add_space(12.0);
 
-            // Trigger Sensitivity Slider
+            // Trigger Sensitivity Slider with White Knob
             ui.label(
                 egui::RichText::new(
                     if is_bn {
@@ -416,7 +425,16 @@ fn render_ducking_view(
                 .size(13.0)
                 .color(colors.text_primary),
             );
-            if ui.add(egui::Slider::new(&mut config.trigger_threshold, 0.05..=0.60).step_by(0.05)).changed() {
+            if theme::white_knob_slider(
+                ui,
+                &mut config.trigger_threshold,
+                0.05,
+                0.60,
+                Some(0.01),
+                "",
+                3,
+                colors.accent,
+            ).changed() {
                 audio_engine.update_config(config);
                 let _ = config.save();
             }
@@ -505,7 +523,16 @@ fn render_footstep_view(ui: &mut egui::Ui, config: &mut AppConfig, colors: &Them
                     .size(13.0)
                     .color(colors.text_primary),
             );
-            if ui.add(egui::Slider::new(&mut config.footstep_boost_db, 0.0..=12.0).suffix(" dB").step_by(1.0)).changed() {
+            if theme::white_knob_slider(
+                ui,
+                &mut config.footstep_boost_db,
+                0.0,
+                12.0,
+                Some(1.0),
+                " dB",
+                0,
+                colors.accent,
+            ).changed() {
                 let _ = config.save();
             }
 
@@ -635,7 +662,16 @@ fn render_mixer_view(
                             // Volume Slider
                             let mut vol = (app.volume * 100.0).round();
                             ui.label(egui::RichText::new(if is_bn { "ভলিউম:" } else { "Vol:" }).size(12.0).color(colors.text_secondary));
-                            if ui.add(egui::Slider::new(&mut vol, 0.0..=100.0).suffix("%").step_by(1.0)).changed() {
+                            if theme::white_knob_slider(
+                                ui,
+                                &mut vol,
+                                0.0,
+                                100.0,
+                                Some(1.0),
+                                "%",
+                                0,
+                                colors.accent,
+                            ).changed() {
                                 audio_engine.send_command(AudioEngineCommand::SetAppVolume {
                                     pid: app.pid,
                                     volume: vol / 100.0,
