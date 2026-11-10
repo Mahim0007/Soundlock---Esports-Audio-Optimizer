@@ -72,6 +72,10 @@ Unlike bloated Electron-based utility suites that chew up 800 MB of RAM and caus
 * **Single Instance Protection:** Named kernel mutex (`Local\SoundLock_Suite_SingleInstance`) prevents duplicate background instances.
 * **Silent Windows Startup:** Optional Windows registry autostart (`HKEY_CURRENT_USER\...\Run`) with proper quoted executable paths.
 
+### 🔄 7. Built-in 1-Click GitHub Auto-Updater
+* **Zero-Configuration Background Checks:** Checks GitHub Releases API in the background upon launch.
+* **1-Click Seamless In-App Upgrade:** When a new release (`vX.Y.Z`) is published, a top-bar banner alerts the user. 1-click downloads the release binary, automatically swaps the executable in 1 second, and restarts without requiring external installers or manual downloads.
+
 ---
 
 ## 🕹️ Supported Games & Audio Targets
@@ -175,3 +179,4 @@ SoundLock Suite has been verified and audited using **Reverse Engineer Anything 
 ## 📄 License
 
 SoundLock Suite is developed and maintained by **Mahim**. Built for gamers, streamers, and esports competitors.
+

@@ -6,9 +6,11 @@ pub mod audio_engine;
 pub mod ui;
 pub mod startup;
 pub mod i18n;
+pub mod updater;
 
 use config::AppConfig;
 use audio_engine::AudioEngine;
+use updater::UpdateManager;
 use ui::{Tab, UiState};
 
 fn main() -> eframe::Result<()> {
@@ -62,10 +64,12 @@ fn main() -> eframe::Result<()> {
             setup_system_fonts(&cc.egui_ctx);
             let colors = theme::ThemeColors::new(&config.accent_hex);
             theme::apply_theme(&cc.egui_ctx, &colors);
+            let updater = UpdateManager::new();
             Box::new(SoundLockApp {
                 config,
                 active_tab: Tab::General,
                 audio_engine,
+                updater,
                 ui_state: UiState::default(),
                 should_quit: false,
             })
@@ -111,6 +115,7 @@ struct SoundLockApp {
     config: AppConfig,
     active_tab: Tab,
     audio_engine: AudioEngine,
+    updater: UpdateManager,
     ui_state: UiState,
     should_quit: bool,
 }
@@ -129,6 +134,7 @@ impl eframe::App for SoundLockApp {
             &mut self.config,
             &mut self.active_tab,
             &self.audio_engine,
+            &self.updater,
             &mut self.ui_state,
             &mut self.should_quit,
         );

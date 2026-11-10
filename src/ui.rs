@@ -39,6 +39,7 @@ pub fn render_ui(
     config: &mut AppConfig,
     active_tab: &mut Tab,
     audio_engine: &AudioEngine,
+    updater: &crate::updater::UpdateManager,
     ui_state: &mut UiState,
     should_quit: &mut bool,
 ) {
@@ -138,6 +139,53 @@ pub fn render_ui(
                     if ui.add(cancel_btn).clicked() {
                         ui.ctx().send_viewport_cmd(egui::ViewportCommand::Minimized(true));
                     }
+
+                    // Auto-updater status pill in top bar
+                    let update_status = updater.status.lock().map(|s| s.clone()).unwrap_or(crate::updater::UpdateStatus::Idle);
+                    match &update_status {
+                        crate::updater::UpdateStatus::Available { version, download_url, .. } => {
+                            ui.add_space(8.0);
+                            let update_btn = egui::Button::new(
+                                egui::RichText::new(format!("🚀 Update v{}", version))
+                                    .strong()
+                                    .size(11.5)
+                                    .color(Color32::WHITE),
+                            )
+                            .fill(Color32::from_rgb(0, 150, 240))
+                            .rounding(egui::Rounding::same(6.0));
+
+                            if ui.add(update_btn).clicked() {
+                                updater.download_and_install(download_url.clone());
+                            }
+                        }
+                        crate::updater::UpdateStatus::Downloading(_) => {
+                            ui.add_space(8.0);
+                            ui.label(
+                                egui::RichText::new("⬇ Downloading...")
+                                    .size(11.5)
+                                    .color(Color32::from_rgb(0, 200, 255)),
+                            );
+                        }
+                        crate::updater::UpdateStatus::ReadyToRestart { new_exe, current_exe } => {
+                            ui.add_space(8.0);
+                            let restart_btn = egui::Button::new(
+                                egui::RichText::new("🔄 Restart to Update")
+                                    .strong()
+                                    .size(11.5)
+                                    .color(Color32::WHITE),
+                            )
+                            .fill(Color32::from_rgb(0, 180, 80))
+                            .rounding(egui::Rounding::same(6.0));
+
+                            if ui.add(restart_btn).clicked() {
+                                let _ = updater.apply_and_restart(new_exe, current_exe);
+                                audio_engine.stop();
+                                std::thread::sleep(std::time::Duration::from_millis(80));
+                                std::process::exit(0);
+                            }
+                        }
+                        _ => {}
+                    }
                 });
             });
 
@@ -153,7 +201,7 @@ pub fn render_ui(
                     Tab::SpecificApps => render_specific_apps_view(ui, config, ui_state, &telemetry, audio_engine, &colors, lang),
                     Tab::Shortcuts => render_shortcuts_view(ui, config, ui_state, &telemetry, audio_engine, &colors, lang),
                     Tab::Developer => render_developer_view(ui, &telemetry, &colors),
-                    Tab::Information => render_information_view(ui, &colors),
+                    Tab::Information => render_information_view(ui, &colors, updater, audio_engine),
                 }
             });
         });
@@ -904,26 +952,183 @@ fn render_developer_view(ui: &mut egui::Ui, telemetry: &EngineTelemetry, colors:
 // ----------------------------------------------------
 // 8. INFORMATION TAB
 // ----------------------------------------------------
-fn render_information_view(ui: &mut egui::Ui, colors: &ThemeColors) {
+fn render_information_view(
+    ui: &mut egui::Ui,
+    colors: &ThemeColors,
+    updater: &crate::updater::UpdateManager,
+    audio_engine: &AudioEngine,
+) {
+    // Card 1: App Info
     egui::Frame::none()
         .fill(colors.card_bg)
         .stroke(Stroke::new(1.0_f32, colors.card_stroke))
         .rounding(egui::Rounding::same(10.0))
         .inner_margin(16.0)
         .show(ui, |ui| {
-            ui.label(egui::RichText::new("SoundLock Suite v0.1.0").strong().size(18.0).color(colors.accent));
+            ui.label(
+                egui::RichText::new(format!("SoundLock Suite v{}", updater.current_version()))
+                    .strong()
+                    .size(18.0)
+                    .color(colors.accent),
+            );
             ui.add_space(4.0);
             ui.label(
                 egui::RichText::new("Esports-Grade Smart Game-Audio Ducking & Footstep Booster")
                     .size(13.0)
                     .color(colors.text_primary),
             );
-            ui.add_space(10.0);
+            ui.add_space(8.0);
             ui.label(
                 egui::RichText::new("Engineered 100% in pure Rust with native WASAPI integration for sub-millisecond reaction and zero game FPS drop.")
                     .size(12.5)
                     .color(colors.text_secondary),
             );
+            ui.add_space(10.0);
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("GitHub Repository:").size(12.5).color(colors.text_muted));
+                ui.hyperlink_to("github.com/mahim0007/soundlock-suite", "https://github.com/mahim0007/soundlock-suite");
+            });
+        });
+
+    ui.add_space(14.0);
+
+    // Card 2: Software Updates & GitHub Auto-Update
+    egui::Frame::none()
+        .fill(colors.card_bg)
+        .stroke(Stroke::new(1.0_f32, colors.card_stroke))
+        .rounding(egui::Rounding::same(10.0))
+        .inner_margin(16.0)
+        .show(ui, |ui| {
+            ui.label(
+                egui::RichText::new("Software Updates")
+                    .strong()
+                    .size(15.0)
+                    .color(colors.text_primary),
+            );
+            ui.add_space(6.0);
+            ui.label(
+                egui::RichText::new("SoundLock checks GitHub Releases in the background. When you release a new version on GitHub, the app detects it and lets you update with 1 click.")
+                    .size(12.5)
+                    .color(colors.text_secondary),
+            );
+            ui.add_space(12.0);
+
+            let status = updater.status.lock().map(|s| s.clone()).unwrap_or(crate::updater::UpdateStatus::Idle);
+            match status {
+                crate::updater::UpdateStatus::Idle => {
+                    let btn = egui::Button::new(
+                        egui::RichText::new("⟳ Check for Updates Now")
+                            .size(13.0)
+                            .color(colors.text_primary),
+                    )
+                    .fill(Color32::from_rgb(32, 38, 54))
+                    .rounding(egui::Rounding::same(6.0));
+
+                    if ui.add(btn).clicked() {
+                        updater.check_for_updates();
+                    }
+                }
+                crate::updater::UpdateStatus::Checking => {
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.label(
+                            egui::RichText::new("Checking GitHub for newer releases...")
+                                .size(13.0)
+                                .color(colors.text_primary),
+                        );
+                    });
+                }
+                crate::updater::UpdateStatus::UpToDate(ver) => {
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new(format!("✓ SoundLock is up to date (v{})", ver))
+                                .strong()
+                                .size(13.0)
+                                .color(Color32::from_rgb(0, 220, 120)),
+                        );
+                        ui.add_space(10.0);
+                        if ui.button("⟳ Check Again").clicked() {
+                            updater.check_for_updates();
+                        }
+                    });
+                }
+                crate::updater::UpdateStatus::Available { version, download_url, notes } => {
+                    ui.label(
+                        egui::RichText::new(format!("🚀 New Version Available: v{}", version))
+                            .strong()
+                            .size(14.0)
+                            .color(Color32::from_rgb(0, 180, 255)),
+                    );
+                    if !notes.is_empty() {
+                        ui.add_space(4.0);
+                        ui.label(
+                            egui::RichText::new(format!("Release Notes: {}", notes))
+                                .small()
+                                .color(colors.text_muted),
+                        );
+                    }
+                    ui.add_space(10.0);
+
+                    let dl_btn = egui::Button::new(
+                        egui::RichText::new("⚡ Download & Install Update Now")
+                            .strong()
+                            .size(13.0)
+                            .color(Color32::WHITE),
+                    )
+                    .fill(Color32::from_rgb(0, 150, 240))
+                    .rounding(egui::Rounding::same(6.0));
+
+                    if ui.add(dl_btn).clicked() {
+                        updater.download_and_install(download_url);
+                    }
+                }
+                crate::updater::UpdateStatus::Downloading(_) => {
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.label(
+                            egui::RichText::new("Downloading latest release package from GitHub...")
+                                .size(13.0)
+                                .color(Color32::from_rgb(0, 200, 255)),
+                        );
+                    });
+                }
+                crate::updater::UpdateStatus::ReadyToRestart { new_exe, current_exe } => {
+                    ui.label(
+                        egui::RichText::new("✓ Update downloaded and verified successfully!")
+                            .strong()
+                            .size(13.0)
+                            .color(Color32::from_rgb(0, 220, 120)),
+                    );
+                    ui.add_space(10.0);
+
+                    let restart_btn = egui::Button::new(
+                        egui::RichText::new("🔄 Restart SoundLock to Apply Update")
+                            .strong()
+                            .size(13.0)
+                            .color(Color32::WHITE),
+                    )
+                    .fill(Color32::from_rgb(0, 180, 80))
+                    .rounding(egui::Rounding::same(6.0));
+
+                    if ui.add(restart_btn).clicked() {
+                        let _ = updater.apply_and_restart(&new_exe, &current_exe);
+                        audio_engine.stop();
+                        std::thread::sleep(std::time::Duration::from_millis(80));
+                        std::process::exit(0);
+                    }
+                }
+                crate::updater::UpdateStatus::Failed(err) => {
+                    ui.label(
+                        egui::RichText::new(format!("⚠ Update check: {}", err))
+                            .size(13.0)
+                            .color(Color32::from_rgb(255, 120, 120)),
+                    );
+                    ui.add_space(8.0);
+                    if ui.button("⟳ Retry Check").clicked() {
+                        updater.check_for_updates();
+                    }
+                }
+            }
         });
 }
 
