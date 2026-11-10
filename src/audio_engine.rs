@@ -128,9 +128,17 @@ impl AudioEngine {
 
         #[cfg(windows)]
         let mut session_mgr: Option<windows::Win32::Media::Audio::IAudioSessionManager2> = None;
+        let mut last_session_refresh = Instant::now();
 
         while is_running.load(Ordering::Relaxed) {
             let loop_start = Instant::now();
+
+            // Periodic session manager refresh (every 2.5s) to detect newly launched games or device changes
+            #[cfg(windows)]
+            if last_session_refresh.elapsed().as_secs() >= 2 {
+                session_mgr = None;
+                last_session_refresh = Instant::now();
+            }
 
             // 1. Process any incoming user commands from UI
             while let Ok(cmd) = command_receiver.try_recv() {
@@ -488,52 +496,49 @@ impl AudioEngine {
 }
 
 fn identify_target_game(apps: &[AudioAppInfo], target_game_setting: &str) -> (bool, String, f32) {
-    let known_esports = [
-        "cs2", "csgo", "valorant", "r5apex", "apex", "cod", "warzone", "fortnite",
-        "overwatch", "rainbowsix", "pubg", "deadlock", "destiny2", "halo",
+    let known_esports: &[(&[&str], &str)] = &[
+        (&["valorant", "riotclient"], "VALORANT"),
+        (&["cs2", "csgo"], "Counter-Strike 2"),
+        (&["r5apex", "apex"], "Apex Legends"),
+        (&["cod", "warzone", "bootcamp"], "Call of Duty / Warzone"),
+        (&["fortnite"], "Fortnite"),
+        (&["overwatch"], "Overwatch 2"),
+        (&["rainbowsix"], "Rainbow Six Siege"),
+        (&["tslgame", "pubg"], "PUBG: BATTLEGROUNDS"),
+        (&["deadlock"], "Deadlock"),
+        (&["destiny2"], "Destiny 2"),
+        (&["halo"], "Halo Infinite"),
     ];
 
     // Explicit specific game match
     if !target_game_setting.starts_with("Auto") {
-        let search_keys: &[&str] = if target_game_setting.contains("Counter-Strike") {
-            &["cs2", "csgo"]
-        } else if target_game_setting.contains("VALORANT") {
-            &["valorant"]
-        } else if target_game_setting.contains("Apex") {
-            &["r5apex", "apex"]
-        } else if target_game_setting.contains("Call of Duty") {
-            &["cod", "warzone"]
-        } else if target_game_setting.contains("Fortnite") {
-            &["fortnite"]
-        } else if target_game_setting.contains("Overwatch") {
-            &["overwatch"]
-        } else if target_game_setting.contains("Rainbow Six") {
-            &["rainbowsix"]
-        } else {
-            &[]
-        };
-
-        if !search_keys.is_empty() {
-            if let Some(game) = apps.iter().find(|a| {
-                let low = a.name.to_lowercase();
-                search_keys.iter().any(|&k| low.contains(k))
-            }) {
-                return (true, game.name.clone(), game.peak);
+        let needle = target_game_setting.to_lowercase();
+        // Check known esports for specific title
+        for (keys, title) in known_esports {
+            if needle.contains(&title.to_lowercase()) || keys.iter().any(|k| needle.contains(k)) {
+                if let Some(game) = apps.iter().find(|a| {
+                    let low = a.name.to_lowercase();
+                    keys.iter().any(|k| low.contains(k))
+                }) {
+                    return (true, (*title).to_string(), game.peak);
+                }
             }
-        } else {
-            let needle = target_game_setting.to_lowercase().replace(".exe", "");
-            if let Some(game) = apps.iter().find(|a| a.name.to_lowercase().contains(&needle)) {
-                return (true, game.name.clone(), game.peak);
-            }
+        }
+        // Fallback for custom specified target
+        let clean = needle.replace(".exe", "");
+        if let Some(game) = apps.iter().find(|a| a.name.to_lowercase().contains(&clean)) {
+            return (true, game.name.clone(), game.peak);
         }
     }
 
-    // Auto-detection: First check recognized esports games
-    if let Some(game) = apps.iter().find(|a| {
-        let low = a.name.to_lowercase();
-        known_esports.iter().any(|g| low.contains(g))
-    }) {
-        return (true, game.name.clone(), game.peak);
+    // Auto-detection: First check recognized esports games in active audio sessions
+    for (keys, title) in known_esports {
+        if let Some(game) = apps.iter().find(|a| {
+            let low = a.name.to_lowercase();
+            keys.iter().any(|k| low.contains(k))
+        }) {
+            return (true, (*title).to_string(), game.peak);
+        }
     }
 
     // Auto-detection fallback: Any audio session producing sound that is NOT in duck targets
@@ -688,14 +693,35 @@ mod tests {
         // Specific dropdown selection
         let (active, name, peak) = identify_target_game(&apps, "Counter-Strike 2 (cs2)");
         assert!(active);
-        assert_eq!(name, "cs2.exe");
+        assert_eq!(name, "Counter-Strike 2");
         assert_eq!(peak, 0.45);
 
         // Auto detection
         let (active_auto, name_auto, _) = identify_target_game(&apps, "Auto (Any Active Game)");
         assert!(active_auto);
-        assert_eq!(name_auto, "cs2.exe");
+        assert_eq!(name_auto, "Counter-Strike 2");
+
+        // VALORANT Detection Test
+        let val_apps = vec![
+            AudioAppInfo {
+                pid: 35260,
+                name: "VALORANT-Win64-Shipping.exe".to_string(),
+                volume: 1.0,
+                peak: 0.15,
+                is_muted: false,
+                is_target_duck: false,
+            },
+        ];
+        let (val_auto, val_name, _) = identify_target_game(&val_apps, "Auto (Any Active Game)");
+        assert!(val_auto);
+        assert_eq!(val_name, "VALORANT");
+
+        let (val_explicit, val_name2, _) = identify_target_game(&val_apps, "VALORANT");
+        assert!(val_explicit);
+        assert_eq!(val_name2, "VALORANT");
     }
+
+
 
     #[test]
     #[cfg(windows)]

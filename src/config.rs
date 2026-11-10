@@ -33,7 +33,7 @@ impl Default for AppConfig {
             ducking_enabled: true,
             target_game: "Auto (Any Active Game)".to_string(),
             duck_level_percent: 20.0,
-            trigger_threshold: 0.20,
+            trigger_threshold: 0.08,
             fade_out_ms: 120,
             fade_in_ms: 250,
             clutch_hotkey: "Caps Lock".to_string(),
@@ -71,6 +71,10 @@ impl AppConfig {
                 if let Ok(mut cfg) = serde_json::from_str::<AppConfig>(&content) {
                     if cfg.language.eq_ignore_ascii_case("bengali") {
                         cfg.language = "English".to_string();
+                        let _ = cfg.save();
+                    }
+                    if cfg.trigger_threshold > 0.15 {
+                        cfg.trigger_threshold = 0.08;
                         let _ = cfg.save();
                     }
                     cfg.accent_hex = "#E3008C".to_string();
