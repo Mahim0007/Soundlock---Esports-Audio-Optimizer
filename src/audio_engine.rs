@@ -505,9 +505,18 @@ fn identify_target_game(apps: &[AudioAppInfo], target_game_setting: &str) -> (bo
         (&["overwatch"], "Overwatch 2"),
         (&["rainbowsix"], "Rainbow Six Siege"),
         (&["tslgame", "pubg"], "PUBG: BATTLEGROUNDS"),
+        (&["escapefromtarkov", "tarkov"], "Escape from Tarkov"),
+        (&["rustclient", "rust"], "Rust"),
+        (&["discovery", "thefinals"], "The Finals"),
+        (&["dota2", "dota"], "Dota 2"),
+        (&["league of legends", "leagueclientux", "leagueclient"], "League of Legends"),
+        (&["rocketleague"], "Rocket League"),
         (&["deadlock"], "Deadlock"),
         (&["destiny2"], "Destiny 2"),
         (&["halo"], "Halo Infinite"),
+        (&["huntgame", "hunt"], "Hunt: Showdown"),
+        (&["bf2042", "bfv", "bf1", "battlefield"], "Battlefield"),
+        (&["gta5", "fivem"], "GTA V / FiveM"),
     ];
 
     // Explicit specific game match
@@ -719,6 +728,33 @@ mod tests {
         let (val_explicit, val_name2, _) = identify_target_game(&val_apps, "VALORANT");
         assert!(val_explicit);
         assert_eq!(val_name2, "VALORANT");
+
+        // Apex Legends & Warzone Detection Tests
+        let apex_apps = vec![AudioAppInfo { pid: 300, name: "r5apex.exe".to_string(), volume: 1.0, peak: 0.2, is_muted: false, is_target_duck: false }];
+        assert_eq!(identify_target_game(&apex_apps, "Auto (Any Active Game)").1, "Apex Legends");
+
+        let cod_apps = vec![AudioAppInfo { pid: 400, name: "cod.exe".to_string(), volume: 1.0, peak: 0.3, is_muted: false, is_target_duck: false }];
+        assert_eq!(identify_target_game(&cod_apps, "Auto (Any Active Game)").1, "Call of Duty / Warzone");
+
+        let tarkov_apps = vec![AudioAppInfo { pid: 500, name: "EscapeFromTarkov.exe".to_string(), volume: 1.0, peak: 0.1, is_muted: false, is_target_duck: false }];
+        assert_eq!(identify_target_game(&tarkov_apps, "Auto (Any Active Game)").1, "Escape from Tarkov");
+
+        // Generic Fallback for Unknown / Indie / Custom Games
+        let unknown_game = vec![
+            AudioAppInfo { pid: 999, name: "IndieShooter2026.exe".to_string(), volume: 1.0, peak: 0.25, is_muted: false, is_target_duck: false },
+            AudioAppInfo { pid: 200, name: "Spotify.exe".to_string(), volume: 0.8, peak: 0.30, is_muted: false, is_target_duck: true },
+        ];
+        let (unknown_active, unknown_name, _) = identify_target_game(&unknown_game, "Auto (Any Active Game)");
+        assert!(unknown_active);
+        assert!(unknown_name.contains("IndieShooter2026.exe"));
+
+        // Only Spotify / Music running without any game: MUST NOT trigger game detection
+        let music_only = vec![
+            AudioAppInfo { pid: 200, name: "Spotify.exe".to_string(), volume: 0.8, peak: 0.40, is_muted: false, is_target_duck: true },
+            AudioAppInfo { pid: 201, name: "Discord.exe".to_string(), volume: 1.0, peak: 0.10, is_muted: false, is_target_duck: true },
+        ];
+        let (music_active, _, _) = identify_target_game(&music_only, "Auto (Any Active Game)");
+        assert!(!music_active);
     }
 
 

@@ -327,6 +327,12 @@ fn render_general_view(
                                 "Rainbow Six Siege",
                                 "Fortnite",
                                 "Overwatch 2",
+                                "PUBG: BATTLEGROUNDS",
+                                "Escape from Tarkov",
+                                "Rust",
+                                "The Finals",
+                                "Dota 2",
+                                "League of Legends",
                             ];
                             for g in games {
                                 if ui.selectable_value(&mut config.target_game, g.to_string(), g).clicked() {
