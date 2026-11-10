@@ -3,8 +3,8 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::process::Command;
 
-const REPO_OWNER: &str = "mahim0007";
-const REPO_NAME: &str = "soundlock-suite";
+const REPO_OWNER: &str = "Mahim0007";
+const REPO_NAME: &str = "Soundlock---Esports-Audio-Optimizer";
 const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Debug, Clone, PartialEq)]
@@ -276,3 +276,4 @@ mod tests {
         assert!(!is_newer_version("0.0.9", "0.1.0"));
     }
 }
+

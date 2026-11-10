@@ -986,7 +986,7 @@ fn render_information_view(
             ui.add_space(10.0);
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new("GitHub Repository:").size(12.5).color(colors.text_muted));
-                ui.hyperlink_to("github.com/mahim0007/soundlock-suite", "https://github.com/mahim0007/soundlock-suite");
+                ui.hyperlink_to("github.com/Mahim0007/Soundlock---Esports-Audio-Optimizer", "https://github.com/Mahim0007/Soundlock---Esports-Audio-Optimizer");
             });
         });
 
